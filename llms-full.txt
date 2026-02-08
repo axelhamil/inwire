@@ -1,0 +1,480 @@
+# deps-injector — Complete API Reference
+
+> Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens.
+> Proxy-based lazy singleton resolution. ~4.7KB gzipped, 0 runtime deps.
+
+Install: `npm i deps-injector`
+License: MIT
+Exports: ESM + CJS with full .d.ts
+
+## How It Works
+
+The container is a Proxy. Each dependency is defined as a factory function `(container) => instance`. When you access a property on the container, the Proxy intercepts it and delegates to the Resolver. The Resolver:
+
+1. Checks the singleton cache — if already resolved, returns the cached instance
+2. Detects circular dependencies via a `resolving` Set
+3. Creates a tracking Proxy to record which other deps the factory accesses (builds the dep graph)
+4. Calls the factory function with the tracking proxy
+5. Caches the result (unless marked transient)
+6. Calls `onInit()` if the instance implements it (fire-and-forget, not awaited)
+
+TypeScript infers the full container type from the factory definitions — `Container<ResolvedDeps<T>>` maps each key to the return type of its factory.
+
+## createContainer(defs)
+
+```typescript
+function createContainer<T extends DepsDefinition>(defs: T): Container<ResolvedDeps<T>>
+```
+
+Creates a DI container from an object of factory functions. Each factory receives the container as its argument and returns an instance. Dependencies are resolved lazily on first property access and cached as singletons by default.
+
+```typescript
+import { createContainer } from 'deps-injector';
+
+const container = createContainer({
+  logger: () => new LoggerService(),
+  db: () => new Database(process.env.DB_URL!),
+  userRepo: (c): UserRepository => new PgUserRepo(c.db),
+  userService: (c) => new UserService(c.userRepo, c.logger),
+});
+
+container.userService; // lazy, singleton, fully typed
+```
+
+Annotate the return type to program against an interface (dependency inversion):
+
+```typescript
+const container = createContainer({
+  userRepo: (c): UserRepository => new PgUserRepo(c.db),
+  //            ^^^^^^^^^^^^^^^^ contract, not implementation
+});
+container.userRepo; // typed as UserRepository
+```
+
+Validation runs at creation time: non-function values throw `ContainerConfigError`, reserved keys throw `ReservedKeyError`.
+
+## transient(factory)
+
+```typescript
+function transient<T>(factory: Factory<T>): Factory<T>
+```
+
+Marks a factory as transient — a new instance is created on every property access, bypassing the singleton cache. Internally attaches a `Symbol.for('deps-injector:transient')` marker.
+
+```typescript
+import { createContainer, transient } from 'deps-injector';
+
+const container = createContainer({
+  logger: () => new LoggerService(),                  // singleton (default)
+  requestId: transient(() => crypto.randomUUID()),   // new value every time
+});
+
+container.logger === container.logger;       // true  — same instance
+container.requestId === container.requestId; // false — different every time
+```
+
+## container.scope(extra)
+
+```typescript
+scope<E extends DepsDefinition>(extra: E): Container<T & ResolvedDeps<E>>
+```
+
+Creates a child container with additional dependencies. The child inherits all parent singletons via a parent Resolver chain. Scoped singletons are independent — they are cached in the child's own cache.
+
+```typescript
+const app = createContainer({
+  logger: () => new LoggerService(),
+  db: () => new Database(),
+});
+
+const request = app.scope({
+  requestId: () => crypto.randomUUID(),
+  currentUser: () => getCurrentUser(),
+});
+
+request.requestId;  // scoped singleton (unique to this child)
+request.logger;     // inherited from parent (same instance)
+```
+
+Use `scope()` for request-level isolation where child deps should not pollute the parent.
+
+## container.extend(extra)
+
+```typescript
+extend<E extends DepsDefinition>(extra: E): Container<T & ResolvedDeps<E>>
+```
+
+Returns a new container with additional dependencies. Unlike `scope()`, the existing singleton cache is **shared** (copied) — already-resolved singletons from the original container are available without re-resolution.
+
+```typescript
+const base = createContainer({
+  logger: () => new LoggerService(),
+});
+
+const extended = base.extend({
+  db: (c) => new Database(c.logger),
+});
+
+extended.logger; // shared singleton from base
+extended.db;     // new dependency
+```
+
+**scope vs extend**: `scope()` creates a parent-child chain (child delegates to parent for unknown keys). `extend()` creates a flat merged container with a shared cache snapshot. Use `scope()` for request isolation, `extend()` for composition.
+
+**GOTCHA**: Because `extend()` shares the cache, singletons resolved in the original container will be the same objects in the extended container. New singletons resolved in the extended container do NOT propagate back to the original.
+
+## container.preload(...keys)
+
+```typescript
+preload(...keys: (keyof T)[]): Promise<void>
+```
+
+Eagerly resolves specific dependencies (warm-up). Useful for initializing critical services at startup.
+
+```typescript
+const container = createContainer({
+  db: () => new Database(),
+  cache: () => new Redis(),
+  logger: () => new LoggerService(),
+});
+
+await container.preload('db', 'cache');
+// db and cache are now resolved, logger is still lazy
+```
+
+**GOTCHA — CRITICAL**: `preload()` is the **only** way to properly await async `onInit()` hooks. During normal property access, `onInit()` is called but NOT awaited (fire-and-forget, errors swallowed). If your service has async initialization (e.g. database connection), you MUST use `preload()` to surface errors.
+
+## container.inspect()
+
+```typescript
+inspect(): ContainerGraph
+```
+
+Returns the full dependency graph as a serializable JSON object.
+
+```typescript
+interface ContainerGraph {
+  providers: Record<string, ProviderInfo>;
+}
+
+interface ProviderInfo {
+  key: string;
+  resolved: boolean;
+  deps: string[];
+  scope: 'singleton' | 'transient';
+}
+```
+
+```typescript
+container.inspect();
+// {
+//   providers: {
+//     db: { key: 'db', resolved: true, deps: [], scope: 'singleton' },
+//     userRepo: { key: 'userRepo', resolved: true, deps: ['db'], scope: 'singleton' },
+//     logger: { key: 'logger', resolved: false, deps: [], scope: 'singleton' }
+//   }
+// }
+```
+
+**AI usage**: Pipe `JSON.stringify(container.inspect(), null, 2)` into an LLM to analyze the architecture, detect issues, or generate documentation from the live dependency graph.
+
+## container.describe(key)
+
+```typescript
+describe(key: keyof T): ProviderInfo
+```
+
+Returns detailed information about a single provider.
+
+```typescript
+container.describe('userService');
+// { key: 'userService', resolved: true, deps: ['userRepo', 'logger'], scope: 'singleton' }
+```
+
+If the key is not registered, returns `{ key, resolved: false, deps: [], scope: 'singleton' }`.
+
+## container.health()
+
+```typescript
+health(): ContainerHealth
+```
+
+Returns container health status and warnings.
+
+```typescript
+interface ContainerHealth {
+  totalProviders: number;
+  resolved: string[];
+  unresolved: string[];
+  warnings: ContainerWarning[];
+}
+
+interface ContainerWarning {
+  type: 'scope_mismatch' | 'duplicate_key';
+  message: string;
+  details: Record<string, unknown>;
+}
+```
+
+```typescript
+container.health();
+// {
+//   totalProviders: 4,
+//   resolved: ['db', 'logger'],
+//   unresolved: ['cache', 'userService'],
+//   warnings: [
+//     { type: 'scope_mismatch', message: "Singleton 'userService' depends on transient 'requestId'.", details: { singleton: 'userService', transient: 'requestId' } }
+//   ]
+// }
+```
+
+## container.dispose()
+
+```typescript
+dispose(): Promise<void>
+```
+
+Disposes the container. Calls `onDestroy()` on all resolved instances that implement it, in **reverse resolution order** (LIFO). Clears the singleton cache after disposal.
+
+```typescript
+const container = createContainer({
+  db: () => new Database(),    // resolved first
+  cache: () => new Redis(),    // resolved second
+});
+
+container.db;
+container.cache;
+await container.dispose(); // calls cache.onDestroy() then db.onDestroy()
+```
+
+**GOTCHA**: After `dispose()`, accessing dependencies will re-resolve them (cache is cleared). This can cause unexpected behavior if you continue using the container after disposal.
+
+## detectDuplicateKeys(...modules)
+
+```typescript
+function detectDuplicateKeys(...modules: Record<string, unknown>[]): string[]
+```
+
+Detects duplicate keys across multiple module objects. Returns an array of keys that appear in more than one module. Use this before spreading modules into `createContainer()` to catch accidental collisions.
+
+```typescript
+import { detectDuplicateKeys } from 'deps-injector';
+
+const authModule = { logger: () => new AuthLogger(), auth: () => new AuthService() };
+const userModule = { logger: () => new UserLogger(), user: () => new UserService() };
+
+detectDuplicateKeys(authModule, userModule);
+// ['logger'] — appears in both modules
+```
+
+## String(container)
+
+Containers implement `toString()` for human-readable output:
+
+```typescript
+String(container);
+// "Container { db -> [] (resolved), logger (pending) }"
+```
+
+Also works with `Symbol.toPrimitive` and `Symbol.toStringTag`.
+
+## Lifecycle Hooks: OnInit / OnDestroy
+
+```typescript
+interface OnInit {
+  onInit(): void | Promise<void>;
+}
+
+interface OnDestroy {
+  onDestroy(): void | Promise<void>;
+}
+```
+
+Lifecycle hooks are **duck-typed** — no need to explicitly implement the interface. Any object with an `onInit` or `onDestroy` method will be detected automatically.
+
+```typescript
+import type { OnInit, OnDestroy } from 'deps-injector';
+
+class Database implements OnInit, OnDestroy {
+  async onInit() { await this.connect(); }
+  async onDestroy() { await this.disconnect(); }
+}
+
+const container = createContainer({
+  db: () => new Database(),
+});
+
+// Use preload to properly await async onInit:
+await container.preload('db');
+
+// Later, dispose calls onDestroy in LIFO order:
+await container.dispose();
+```
+
+**GOTCHA — CRITICAL**: During normal property access (`container.db`), `onInit()` IS called but NOT awaited. It runs as fire-and-forget. If `onInit()` returns a Promise:
+- The Promise is caught silently (errors are swallowed)
+- The instance is returned immediately, potentially before initialization completes
+- Use `await container.preload('db')` to ensure `onInit()` completes and errors surface
+
+This is by design: property access in JavaScript is synchronous, so the Proxy cannot await.
+
+## Modules Pattern
+
+Group related factories into plain objects and spread them into `createContainer()`:
+
+```typescript
+const dbModule = {
+  db: () => new Database(process.env.DB_URL!),
+  redis: () => new Redis(process.env.REDIS_URL!),
+};
+
+const serviceModule = {
+  userService: (c) => new UserService(c.db),
+};
+
+const container = createContainer({
+  ...dbModule,
+  ...serviceModule,
+});
+```
+
+Use `satisfies DepsDefinition` on module objects for type checking without losing literal types:
+
+```typescript
+import type { DepsDefinition } from 'deps-injector';
+
+const dbModule = {
+  db: () => new Database(),
+} satisfies DepsDefinition;
+```
+
+## Test Overrides Pattern
+
+Replace any dependency with a mock by spreading production deps and overriding:
+
+```typescript
+const container = createContainer({
+  ...productionDeps,
+  db: () => new InMemoryDatabase(), // override
+});
+```
+
+No special test API needed — last spread wins.
+
+## Type Utilities
+
+```typescript
+type Factory<T = any> = (container: any) => T;
+type DepsDefinition = Record<string, Factory>;
+type ResolvedDeps<T extends DepsDefinition> = { readonly [K in keyof T]: ReturnType<T[K]> };
+type Container<T extends Record<string, any> = Record<string, any>> = T & IContainer<T>;
+```
+
+## Error Reference
+
+All errors extend `ContainerError`, which extends `Error`. Every error has:
+- `hint: string` — actionable fix suggestion
+- `details: Record<string, unknown>` — structured context for programmatic consumption
+
+### ContainerConfigError
+
+Thrown when a non-function value is passed in the deps definition.
+
+```
+'apiKey' must be a factory function, got string.
+hint: "Wrap it: apiKey: () => 'sk-123'"
+```
+
+Constructor: `new ContainerConfigError(key: string, actualType: string)`
+Details: `{ key, actualType }`
+
+### ReservedKeyError
+
+Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `preload`, `inspect`, `describe`, `health`, `dispose`, `toString`.
+
+```
+'inspect' is a reserved container method.
+hint: "Rename this dependency, e.g. 'inspectService' or 'myInspect'."
+```
+
+Constructor: `new ReservedKeyError(key: string, reserved: readonly string[])`
+Details: `{ key, reserved }`
+
+### ProviderNotFoundError
+
+Thrown when a dependency cannot be found during resolution. Includes Levenshtein-based fuzzy suggestion if a similar key exists (>= 50% similarity).
+
+```
+Cannot resolve 'userServce': dependency 'userServce' not found.
+Registered keys: [userService, logger, db]
+Did you mean 'userService'?
+hint: "Did you mean 'userService'? Or add 'userServce' to your container: ..."
+```
+
+Constructor: `new ProviderNotFoundError(key: string, chain: string[], registered: string[], suggestion?: string)`
+Details: `{ key, chain, registered, suggestion }`
+
+### CircularDependencyError
+
+Thrown when a circular dependency is detected in the resolution chain.
+
+```
+Circular dependency detected while resolving 'authService'.
+Cycle: authService -> userService -> authService
+```
+
+Constructor: `new CircularDependencyError(key: string, chain: string[])`
+Details: `{ key, chain, cycle }`
+
+### UndefinedReturnError
+
+Thrown when a factory function returns `undefined`.
+
+```
+Factory 'db' returned undefined.
+hint: "Your factory function returned undefined. Did you forget a return statement?"
+```
+
+Constructor: `new UndefinedReturnError(key: string, chain: string[])`
+Details: `{ key, chain }`
+
+### FactoryError
+
+Thrown when a factory function throws an error during resolution. Wraps the original error.
+
+```
+Factory 'db' threw an error: "Connection refused"
+hint: "Check the factory function for 'db'. The error occurred during instantiation."
+```
+
+Constructor: `new FactoryError(key: string, chain: string[], originalError: unknown)`
+Details: `{ key, chain, originalError }` (originalError is the message string)
+Additional property: `originalError: unknown` (the raw error object)
+
+### ScopeMismatchWarning
+
+Not an error — a warning emitted when a singleton depends on a transient. Surfaced via `container.health().warnings`.
+
+```
+Singleton 'userService' depends on transient 'requestId'.
+hint: "The transient value was resolved once and is now frozen inside the singleton. ..."
+```
+
+Constructor: `new ScopeMismatchWarning(singletonKey: string, transientKey: string)`
+Properties: `type: 'scope_mismatch'`, `message`, `hint`, `details: { singleton, transient }`
+
+## Gotchas and Common Pitfalls
+
+1. **Async onInit is fire-and-forget**: `onInit()` is called during property access but NOT awaited. Errors are swallowed. Use `await container.preload('key')` to properly await async initialization.
+
+2. **Scope mismatch**: A singleton depending on a transient freezes the transient value. The singleton will always see the first resolved value. Check `container.health().warnings` for `scope_mismatch` warnings.
+
+3. **Reserved keys**: `scope`, `extend`, `preload`, `inspect`, `describe`, `health`, `dispose`, `toString` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
+
+4. **Undefined return**: Factories that return `undefined` (missing return statement, void function) throw `UndefinedReturnError`. Every factory must return a value.
+
+5. **LIFO dispose order**: `dispose()` calls `onDestroy()` in reverse resolution order. If `db` was resolved before `cache`, `cache.onDestroy()` runs first.
+
+6. **extend() shares cache**: `extend()` copies the singleton cache. Already-resolved singletons are shared. New resolutions in the extended container do NOT propagate back to the original.
+
+7. **scope() vs extend()**: `scope()` creates a parent-child chain (child delegates unknown keys to parent). `extend()` creates a flat merged container. Use `scope()` for request-level isolation, `extend()` for additive composition.

@@ -1,0 +1,51 @@
+# deps-injector
+
+> Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens.
+> Proxy-based lazy singleton resolution. ~4.7KB gzipped, 0 runtime deps.
+
+deps-injector uses factory functions `(container) => instance` as the single abstraction. Property access on the container triggers lazy resolution through a Proxy. Instances are cached as singletons by default. TypeScript infers the full container type from the factory definitions — no manual type wiring. Built-in introspection methods return serializable JSON, making the dependency graph directly consumable by LLMs and AI tooling.
+
+## Core API
+
+- `createContainer(defs)` — Creates a DI container from an object of factory functions. Returns a fully-typed Proxy.
+- `transient(factory)` — Marks a factory as transient (new instance on every access, no caching).
+- `detectDuplicateKeys(...modules)` — Detects keys that appear in more than one module object.
+
+## Container Methods
+
+- `.scope(extra)` — Creates a child container with additional deps. Child inherits parent singletons.
+- `.extend(extra)` — Returns a new container with merged factories. Shares existing singleton cache.
+- `.preload(...keys)` — Eagerly resolves specific dependencies. Only way to await async `onInit()`.
+- `.inspect()` — Returns the full dependency graph as `ContainerGraph` (serializable JSON).
+- `.describe(key)` — Returns `ProviderInfo` for a single provider.
+- `.health()` — Returns `ContainerHealth` with warnings (e.g. scope mismatches).
+- `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order.
+
+## Types
+
+- `Container<T>` — Resolved deps + container methods
+- `Factory<T>` — `(container: any) => T`
+- `DepsDefinition` — `Record<string, Factory>`
+- `ResolvedDeps<T>` — Maps each key to its factory's return type
+- `OnInit` — Interface: `onInit(): void | Promise<void>`
+- `OnDestroy` — Interface: `onDestroy(): void | Promise<void>`
+- `ContainerGraph` — `{ providers: Record<string, ProviderInfo> }`
+- `ContainerHealth` — `{ totalProviders, resolved, unresolved, warnings }`
+- `ContainerWarning` — `{ type: 'scope_mismatch' | 'duplicate_key', message, details }`
+- `ProviderInfo` — `{ key, resolved, deps, scope: 'singleton' | 'transient' }`
+
+## Errors
+
+All errors extend `ContainerError` and include `hint` (actionable fix) and `details` (structured context).
+
+- `ContainerConfigError` — Non-function value in deps definition
+- `ReservedKeyError` — Reserved container method name used as dependency key
+- `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion)
+- `CircularDependencyError` — Circular dependency detected in resolution chain
+- `UndefinedReturnError` — Factory returned `undefined`
+- `FactoryError` — Factory threw an error during resolution (wraps original error)
+- `ScopeMismatchWarning` — Singleton depends on transient (warning, not error)
+
+## Full Documentation
+
+See `llms-full.txt` for complete API reference with signatures, examples, and gotchas.
