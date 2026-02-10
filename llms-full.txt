@@ -378,7 +378,7 @@ const container = createContainer({
 });
 ```
 
-**Design trade-off**: Factories defined inline in `createContainer()` get full type inference on `c`. Factories in separate module objects use `c: any` because TypeScript cannot infer the final container shape before composition. This is deliberate — zero ceremony over compile-time module typing, compensated by runtime diagnostics (fuzzy suggestions, resolution chains, structured errors, health warnings).
+**Design trade-off**: The `c` parameter in every factory is typed as `any`. TypeScript fully infers the *resolved* container type (what you get from `container.xyz`), but cannot circularly infer the container shape inside the factories that define it. This is deliberate — zero ceremony, no tokens, no decorators. Runtime diagnostics compensate: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches.
 
 Use `satisfies DepsDefinition` on module objects for type checking without losing literal types:
 

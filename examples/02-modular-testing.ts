@@ -7,19 +7,17 @@ import { createContainer, transient } from "../src/index.js";
 
 // ── Modules (plain objects of factories) ────────────────────────────────────
 //
-// Design trade-off: when modules are defined separately, `c` is typed as `any`
-// because TypeScript cannot infer the final container shape before composition.
-// Inline factories inside createContainer() get full inference for free.
+// Design trade-off: `c` is typed as `any` in every factory — TypeScript fully
+// infers the *resolved* container type (what you get from `container.xyz`), but
+// cannot circularly infer the container shape inside the factories that define it.
 //
+// This is deliberate: zero ceremony, no tokens, no decorators.
 // In exchange, inwire provides a robust runtime safety net:
 //   - ProviderNotFoundError with fuzzy suggestion ("Did you mean 'logger'?")
 //   - Full resolution chain in every error (a -> b -> c (not found))
 //   - Structured `hint` + `details` on all 7 error types
 //   - Duplicate key detection internally via health().warnings
 //   - health() warnings for scope mismatches (singleton depending on transient)
-//
-// This is a deliberate choice: zero ceremony over compile-time module typing,
-// with runtime diagnostics detailed enough for both humans and AI to auto-fix.
 
 const shared = {
   config: () => ({ appName: "MyApp", version: "1.0.0" }),

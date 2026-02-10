@@ -113,7 +113,7 @@ const container = createContainer({
 });
 ```
 
-> **Design trade-off**: factories defined inline in `createContainer()` get full type inference on `c`. Factories in separate module objects use `c: any` because TypeScript cannot infer the final container shape before composition. This is a deliberate choice — zero ceremony over compile-time module typing. In exchange, inwire provides a robust runtime safety net: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches. See [examples/02-modular-testing.ts](examples/02-modular-testing.ts) for a full walkthrough.
+> **Design trade-off**: the `c` parameter in every factory is typed as `any`. TypeScript fully infers the **resolved container** type (what you get from `container.userService`), but cannot circularly infer the container shape inside the factories that define it. This is a deliberate choice — zero ceremony, no tokens, no decorators. In exchange, inwire provides a robust runtime safety net: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches. See [examples/02-modular-testing.ts](examples/02-modular-testing.ts) for a full walkthrough.
 
 ### Test Overrides
 
