@@ -1,15 +1,17 @@
 # inwire — Complete API Reference
 
-> Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens.
+> Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
 > Proxy-based lazy singleton resolution. ~4.7KB gzipped, 0 runtime deps.
 
 Install: `npm i inwire`
 License: MIT
-Exports: ESM + CJS with full .d.ts
+Exports: ESM with full .d.mts
 
 ## How It Works
 
-The container is a Proxy. Each dependency is defined as a factory function `(container) => instance`. When you access a property on the container, the Proxy intercepts it and delegates to the Resolver. The Resolver:
+The container is a Proxy. Dependencies are defined via a fluent builder: `container().add('key', factory).build()`. Each `.add()` call accumulates the TypeScript type incrementally — the `c` parameter in every factory is typed as the union of all previously registered dependencies.
+
+When you access a property on the built container, the Proxy intercepts it and delegates to the Resolver. The Resolver:
 
 1. Checks the singleton cache — if already resolved, returns the cached instance
 2. Detects circular dependencies via a `resolving` Set
@@ -18,78 +20,178 @@ The container is a Proxy. Each dependency is defined as a factory function `(con
 5. Caches the result (unless marked transient)
 6. Calls `onInit()` if the instance implements it (fire-and-forget, not awaited)
 
-TypeScript infers the full container type from the factory definitions — `Container<ResolvedDeps<T>>` maps each key to the return type of its factory.
-
-## createContainer(defs)
+## container()
 
 ```typescript
-function createContainer<T extends DepsDefinition>(defs: T): Container<ResolvedDeps<T>>
+function container<T extends Record<string, any> = Record<string, any>>(): ContainerBuilder<T>
 ```
 
-Creates a DI container from an object of factory functions. Each factory receives the container as its argument and returns an instance. Dependencies are resolved lazily on first property access and cached as singletons by default.
+Creates a new `ContainerBuilder`. Two modes depending on the generic parameter:
+
+### Free Mode (default)
 
 ```typescript
-import { createContainer } from 'inwire';
+import { container } from 'inwire';
 
-const container = createContainer({
-  logger: () => new LoggerService(),
-  db: () => new Database(process.env.DB_URL!),
-  userRepo: (c): UserRepository => new PgUserRepo(c.db),
-  userService: (c) => new UserService(c.userRepo, c.logger),
-});
+const app = container()
+  .add('logger', () => new LoggerService())
+  .add('db', (c) => new Database(c.logger))      // c: { logger: LoggerService }
+  .add('userService', (c) => new UserService(c.db, c.logger))
+  .build();
 
-container.userService; // lazy, singleton, fully typed
+app.userService; // lazy, singleton, fully typed
 ```
 
-Annotate the return type to program against an interface (dependency inversion):
+Each `.add()` accumulates the type — `c` in every factory knows about all previously registered dependencies.
+
+### Contract Mode (interface-first)
+
+Pass an interface to constrain keys and return types at compile time:
 
 ```typescript
-const container = createContainer({
-  userRepo: (c): UserRepository => new PgUserRepo(c.db),
-  //            ^^^^^^^^^^^^^^^^ contract, not implementation
-});
-container.userRepo; // typed as UserRepository
+interface AppDeps {
+  ILogger: Logger;
+  IDatabase: Database;
+  IUserService: UserService;
+}
+
+const app = container<AppDeps>()
+  .add('ILogger', () => new ConsoleLogger())           // key: autocomplete keyof AppDeps
+  .add('IDatabase', (c) => new PgDatabase(c.ILogger))  // return must be assignable to Database
+  .add('IUserService', (c) => new UserService(c.IDatabase, c.ILogger))
+  .build();
+
+app.ILogger; // typed as Logger (not ConsoleLogger)
 ```
 
-Validation runs at creation time: non-function values throw `ContainerConfigError`, reserved keys throw `ReservedKeyError`.
+The string key acts as a token (like NestJS), but type-safe at compile time. Use this for dependency inversion — program against interfaces, not implementations.
+
+### Instance Values (eager)
+
+Non-function values are registered eagerly:
+
+```typescript
+const app = container()
+  .add('config', { port: 3000, host: 'localhost' })  // object, not factory — eager
+  .add('db', (c) => new Database(c.config))           // factory — lazy
+  .build();
+```
+
+Convention: `typeof value === 'function'` → factory (lazy). Otherwise → instance (eager, wrapped in `() => value`).
+To register a function as a value: `.add('fn', () => myFunction)`.
+
+## ContainerBuilder Methods
+
+### .add(key, factoryOrInstance)
+
+```typescript
+add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V): ContainerBuilder<TContract, TBuilt & Record<K, V>>
+```
+
+Registers a dependency. If `factoryOrInstance` is a function, it's treated as a lazy factory. Otherwise, it's wrapped as `() => value` (eager instance). Returns a new builder with the accumulated type.
+
+Validation at runtime:
+- Reserved keys (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`) throw `ReservedKeyError`
+
+### .addTransient(key, factory)
+
+```typescript
+addTransient<K, V>(key: K, factory: (c: TBuilt) => V): ContainerBuilder<TContract, TBuilt & Record<K, V>>
+```
+
+Registers a transient dependency — a new instance is created on every property access, bypassing the singleton cache.
+
+```typescript
+const app = container()
+  .add('logger', () => new LoggerService())
+  .addTransient('requestId', () => crypto.randomUUID())
+  .build();
+
+app.logger === app.logger;         // true  — singleton
+app.requestId === app.requestId;   // false — new every time
+```
+
+### .addModule(fn)
+
+```typescript
+addModule<TNew extends Record<string, any>>(
+  module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
+): ContainerBuilder<TContract, TNew>
+```
+
+Applies a module — a function that chains `.add()` calls on the builder. `c` in the module's factories is fully typed with all previously registered deps.
+
+```typescript
+import { container, ContainerBuilder } from 'inwire';
+
+function dbModule<T extends { config: { dbUrl: string } }>(
+  b: ContainerBuilder<Record<string, any>, T>,
+) {
+  return b
+    .add('db', (c) => new Database(c.config.dbUrl))
+    .add('cache', (c) => new Redis(c.config.dbUrl));
+}
+
+const app = container()
+  .add('config', { dbUrl: 'postgres://...' })
+  .addModule(dbModule)
+  .build();
+```
+
+### .build()
+
+```typescript
+build(): Container<TBuilt>
+```
+
+Builds and returns the container. Creates the Resolver and Proxy.
 
 ## transient(factory)
 
 ```typescript
-function transient<T>(factory: Factory<T>): Factory<T>
+function transient<T>(factory: (container: any) => T): (container: any) => T
 ```
 
-Marks a factory as transient — a new instance is created on every property access, bypassing the singleton cache. Internally attaches a `Symbol.for('inwire:transient')` marker.
+Marks a factory as transient for use with `scope()` and `extend()`. Internally attaches a `Symbol.for('inwire:transient')` marker.
 
 ```typescript
-import { createContainer, transient } from 'inwire';
+import { container, transient } from 'inwire';
 
-const container = createContainer({
-  logger: () => new LoggerService(),                  // singleton (default)
-  requestId: transient(() => crypto.randomUUID()),   // new value every time
+const app = container()
+  .add('logger', () => new LoggerService())
+  .build();
+
+const extended = app.extend({
+  requestId: transient(() => crypto.randomUUID()),
 });
 
-container.logger === container.logger;       // true  — same instance
-container.requestId === container.requestId; // false — different every time
+extended.requestId === extended.requestId; // false — new every time
 ```
+
+Use `addTransient()` on the builder for transient deps at build time. Use `transient()` wrapper for scope/extend.
 
 ## container.scope(extra, options?)
 
 ```typescript
-scope<E extends DepsDefinition>(extra: E, options?: ScopeOptions): Container<T & ResolvedDeps<E>>
+scope<E extends Record<string, (c: T) => any>>(
+  extra: E,
+  options?: ScopeOptions,
+): Container<T & { [K in keyof E]: ReturnType<E[K]> }>
 ```
 
 Creates a child container with additional dependencies. The child inherits all parent singletons via a parent Resolver chain. Scoped singletons are independent — they are cached in the child's own cache.
 
+The `c` parameter in scope factories is typed as the parent container type `T`.
+
 ```typescript
-const app = createContainer({
-  logger: () => new LoggerService(),
-  db: () => new Database(),
-});
+const app = container()
+  .add('logger', () => new LoggerService())
+  .add('db', () => new Database())
+  .build();
 
 const request = app.scope({
   requestId: () => crypto.randomUUID(),
-  currentUser: () => getCurrentUser(),
+  handler: (c) => new Handler(c.logger),  // c typed as typeof app
 });
 
 request.requestId;  // scoped singleton (unique to this child)
@@ -112,23 +214,39 @@ String(request);        // "Scope(request-123) { requestId (pending) }"
 request.inspect().name; // "request-123"
 ```
 
-Named scopes show their name in `toString()` output (`Scope(name) { ... }` instead of `Container { ... }`) and include the name in `inspect()` results.
+### Scope Override
+
+Scope can override parent keys, replacing the type:
+
+```typescript
+const parent = container()
+  .add('value', () => 'hello')
+  .build();
+
+const child = parent.scope({
+  value: () => 42,  // overrides parent — child.value is number, not string
+});
+```
 
 ## container.extend(extra)
 
 ```typescript
-extend<E extends DepsDefinition>(extra: E): Container<T & ResolvedDeps<E>>
+extend<E extends Record<string, (c: T) => any>>(
+  extra: E,
+): Container<T & { [K in keyof E]: ReturnType<E[K]> }>
 ```
 
 Returns a new container with additional dependencies. Unlike `scope()`, the existing singleton cache is **shared** (copied) — already-resolved singletons from the original container are available without re-resolution.
 
+The `c` parameter in extend factories is typed as the parent container type `T`.
+
 ```typescript
-const base = createContainer({
-  logger: () => new LoggerService(),
-});
+const base = container()
+  .add('logger', () => new LoggerService())
+  .build();
 
 const extended = base.extend({
-  db: (c) => new Database(c.logger),
+  db: (c) => new Database(c.logger),  // c typed as typeof base
 });
 
 extended.logger; // shared singleton from base
@@ -139,6 +257,38 @@ extended.db;     // new dependency
 
 **GOTCHA**: Because `extend()` shares the cache, singletons resolved in the original container will be the same objects in the extended container. New singletons resolved in the extended container do NOT propagate back to the original.
 
+## container.module(fn)
+
+```typescript
+module<TNew extends Record<string, any>>(
+  fn: (builder: ContainerBuilder<Record<string, any>, T>) => ContainerBuilder<Record<string, any>, TNew>,
+): Container<TNew>
+```
+
+Applies a module post-build using the builder pattern for incremental type accumulation of `c`. Semantically equivalent to `extend()` but uses `ContainerBuilder` so that each `.add()` in the callback types `c` with all previously added deps.
+
+```typescript
+const core = container()
+  .add('config', { dbUrl: 'postgres://...' })
+  .add('logger', () => new Logger())
+  .build();
+
+// Post-build module — c is typed incrementally
+const withDb = core.module((b) => b
+  .add('db', (c) => new Database(c.config.dbUrl))   // c: { config, logger }
+  .add('cache', (c) => new Redis(c.config.dbUrl))    // c: { config, logger, db }
+);
+
+// Chainable
+const full = withDb.module((b) => b
+  .add('userService', (c) => new UserService(c.db, c.logger))
+);
+```
+
+Works on containers produced by `scope()`, `extend()`, and other `module()` calls.
+
+Internally, `module()` creates a fresh `ContainerBuilder`, passes it to `fn`, extracts the factories via `_toRecord()`, and delegates to `extend()`.
+
 ## container.preload(...keys)
 
 ```typescript
@@ -148,16 +298,16 @@ preload(...keys: (keyof T)[]): Promise<void>
 Eagerly resolves specific dependencies (warm-up). Call with specific keys to resolve only those, or **without arguments to resolve all dependencies**.
 
 ```typescript
-const container = createContainer({
-  db: () => new Database(),
-  cache: () => new Redis(),
-  logger: () => new LoggerService(),
-});
+const app = container()
+  .add('db', () => new Database())
+  .add('cache', () => new Redis())
+  .add('logger', () => new LoggerService())
+  .build();
 
-await container.preload('db', 'cache');
+await app.preload('db', 'cache');
 // db and cache are now resolved, logger is still lazy
 
-await container.preload();
+await app.preload();
 // resolve ALL dependencies at once
 ```
 
@@ -172,13 +322,9 @@ reset(...keys: (keyof T)[]): void
 Invalidates cached singletons, forcing re-creation on next access. The next property access will re-execute the factory and call `onInit()` again if implemented.
 
 ```typescript
-const container = createContainer({
-  db: () => new Database(),
-});
-
-container.db;         // creates Database
-container.reset('db');
-container.db;         // creates a NEW Database instance
+app.db;         // creates Database
+app.reset('db');
+app.db;         // creates a NEW Database instance
 ```
 
 `reset()` does not affect parent scopes — it only clears the cache of the container it's called on. Resetting an unresolved key is a silent no-op.
@@ -206,7 +352,7 @@ interface ProviderInfo {
 ```
 
 ```typescript
-container.inspect();
+app.inspect();
 // {
 //   providers: {
 //     db: { key: 'db', resolved: true, deps: [], scope: 'singleton' },
@@ -216,18 +362,18 @@ container.inspect();
 // }
 ```
 
-**AI usage**: Pipe `JSON.stringify(container.inspect(), null, 2)` into an LLM to analyze the architecture, detect issues, or generate documentation from the live dependency graph.
+**AI usage**: Pipe `JSON.stringify(app.inspect(), null, 2)` into an LLM to analyze the architecture, detect issues, or generate documentation from the live dependency graph.
 
 ## container.describe(key)
 
 ```typescript
-describe(key: keyof T): ProviderInfo
+describe(key: keyof T | string): ProviderInfo
 ```
 
 Returns detailed information about a single provider.
 
 ```typescript
-container.describe('userService');
+app.describe('userService');
 // { key: 'userService', resolved: true, deps: ['userRepo', 'logger'], scope: 'singleton' }
 ```
 
@@ -257,7 +403,7 @@ interface ContainerWarning {
 ```
 
 ```typescript
-container.health();
+app.health();
 // {
 //   totalProviders: 4,
 //   resolved: ['db', 'logger'],
@@ -277,14 +423,9 @@ dispose(): Promise<void>
 Disposes the container. Calls `onDestroy()` on all resolved instances that implement it, in **reverse resolution order** (LIFO). Clears the singleton cache after disposal.
 
 ```typescript
-const container = createContainer({
-  db: () => new Database(),    // resolved first
-  cache: () => new Redis(),    // resolved second
-});
-
-container.db;
-container.cache;
-await container.dispose(); // calls cache.onDestroy() then db.onDestroy()
+app.db;
+app.cache;
+await app.dispose(); // calls cache.onDestroy() then db.onDestroy()
 ```
 
 **GOTCHA**: After `dispose()`, accessing dependencies will re-resolve them (cache is cleared). This can cause unexpected behavior if you continue using the container after disposal.
@@ -312,7 +453,7 @@ detectDuplicateKeys(authModule, userModule);
 Containers implement `toString()` for human-readable output:
 
 ```typescript
-String(container);
+String(app);
 // "Container { db -> [] (resolved), logger (pending) }"
 ```
 
@@ -340,77 +481,53 @@ class Database implements OnInit, OnDestroy {
   async onDestroy() { await this.disconnect(); }
 }
 
-const container = createContainer({
-  db: () => new Database(),
-});
+const app = container()
+  .add('db', () => new Database())
+  .build();
 
 // Use preload to properly await async onInit:
-await container.preload('db');
+await app.preload('db');
 
 // Later, dispose calls onDestroy in LIFO order:
-await container.dispose();
+await app.dispose();
 ```
 
-**GOTCHA — CRITICAL**: During normal property access (`container.db`), `onInit()` IS called but NOT awaited. It runs as fire-and-forget. If `onInit()` returns a Promise:
+**GOTCHA — CRITICAL**: During normal property access (`app.db`), `onInit()` IS called but NOT awaited. It runs as fire-and-forget. If `onInit()` returns a Promise:
 - The Promise is caught silently (errors are swallowed)
 - The instance is returned immediately, potentially before initialization completes
-- Use `await container.preload('db')` to ensure `onInit()` completes and errors surface
+- Use `await app.preload('db')` to ensure `onInit()` completes and errors surface
 
 This is by design: property access in JavaScript is synchronous, so the Proxy cannot await.
 
-## Modules Pattern
-
-Group related factories into plain objects and spread them into `createContainer()`:
-
-```typescript
-const dbModule = {
-  db: () => new Database(process.env.DB_URL!),
-  redis: () => new Redis(process.env.REDIS_URL!),
-};
-
-const serviceModule = {
-  userService: (c) => new UserService(c.db),
-};
-
-const container = createContainer({
-  ...dbModule,
-  ...serviceModule,
-});
-```
-
-**Design trade-off**: The `c` parameter in every factory is typed as `any`. TypeScript fully infers the *resolved* container type (what you get from `container.xyz`), but cannot circularly infer the container shape inside the factories that define it. This is deliberate — zero ceremony, no tokens, no decorators. Runtime diagnostics compensate: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches.
-
-Use `satisfies DepsDefinition` on module objects for type checking without losing literal types:
-
-```typescript
-import type { DepsDefinition } from 'inwire';
-
-const dbModule = {
-  db: () => new Database(),
-} satisfies DepsDefinition;
-```
-
 ## Test Overrides Pattern
 
-Replace any dependency with a mock by spreading production deps and overriding:
+Build a separate container with mocks — no special test API needed:
 
 ```typescript
-const container = createContainer({
-  ...productionDeps,
-  db: () => new InMemoryDatabase(), // override
-});
-```
+function createTestContainer() {
+  return container()
+    .add('logger', () => ({ log: () => {} }))       // silent mock
+    .add('db', () => new InMemoryDatabase())         // mock
+    .add('userService', (c) => new UserService(c.db, c.logger))
+    .build();
+}
 
-No special test API needed — last spread wins.
+const test = createTestContainer();
+test.userService; // uses mocked deps
+```
 
 ## Type Utilities
 
 ```typescript
+type Container<T extends Record<string, any> = Record<string, any>> = T & IContainer<T>;
+interface ScopeOptions { name?: string }
+```
+
+Internal types (not exported from barrel):
+```typescript
 type Factory<T = any> = (container: any) => T;
 type DepsDefinition = Record<string, Factory>;
 type ResolvedDeps<T extends DepsDefinition> = { readonly [K in keyof T]: ReturnType<T[K]> };
-type Container<T extends Record<string, any> = Record<string, any>> = T & IContainer<T>;
-interface ScopeOptions { name?: string }
 ```
 
 ## Error Reference
@@ -421,7 +538,7 @@ All errors extend `ContainerError`, which extends `Error`. Every error has:
 
 ### ContainerConfigError
 
-Thrown when a non-function value is passed in the deps definition.
+Thrown when a non-function value is passed in scope/extend deps definition.
 
 ```
 'apiKey' must be a factory function, got string.
@@ -430,6 +547,8 @@ hint: "Wrap it: apiKey: () => 'sk-123'"
 
 Constructor: `new ContainerConfigError(key: string, actualType: string)`
 Details: `{ key, actualType }`
+
+Note: In the builder, non-function values passed to `.add()` are automatically treated as instance values (wrapped in `() => value`). This error only applies to `scope()` and `extend()`.
 
 ### ReservedKeyError
 
@@ -508,11 +627,11 @@ Properties: `type: 'scope_mismatch'`, `message`, `hint`, `details: { singleton, 
 
 ## Gotchas and Common Pitfalls
 
-1. **Async onInit is fire-and-forget**: `onInit()` is called during property access but NOT awaited. Errors are swallowed. Use `await container.preload('key')` to properly await async initialization.
+1. **Async onInit is fire-and-forget**: `onInit()` is called during property access but NOT awaited. Errors are swallowed. Use `await app.preload('key')` to properly await async initialization.
 
-2. **Scope mismatch**: A singleton depending on a transient freezes the transient value. The singleton will always see the first resolved value. Check `container.health().warnings` for `scope_mismatch` warnings.
+2. **Scope mismatch**: A singleton depending on a transient freezes the transient value. The singleton will always see the first resolved value. Check `app.health().warnings` for `scope_mismatch` warnings.
 
-3. **Reserved keys**: `scope`, `extend`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
+3. **Reserved keys**: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
 
 4. **Undefined return**: Factories that return `undefined` (missing return statement, void function) throw `UndefinedReturnError`. Every factory must return a value.
 
@@ -523,3 +642,5 @@ Properties: `type: 'scope_mismatch'`, `message`, `hint`, `details: { singleton, 
 7. **scope() vs extend()**: `scope()` creates a parent-child chain (child delegates unknown keys to parent). `extend()` creates a flat merged container. Use `scope()` for request-level isolation, `extend()` for additive composition.
 
 8. **reset() is scope-local**: `reset()` only clears the cache of the container it's called on. In a scope, resetting a key does not affect the parent container's cache.
+
+9. **Instance values in builder only**: `.add('key', plainObject)` auto-wraps as eager instance only on the builder. `scope()` and `extend()` require factory functions — passing non-functions throws `ContainerConfigError`.

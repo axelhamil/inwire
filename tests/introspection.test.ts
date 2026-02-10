@@ -1,19 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer, transient } from '../src/index.js';
+import { container, transient } from '../src/index.js';
 
 describe('introspection', () => {
   describe('inspect()', () => {
     it('returns the full provider graph', () => {
-      const container = createContainer({
-        db: () => 'database',
-        logger: () => 'logger',
-        service: (c) => `${c.db}-${c.logger}`,
-      });
+      const c = container()
+        .add('db', () => 'database')
+        .add('logger', () => 'logger')
+        .add('service', (c) => `${c.db}-${c.logger}`)
+        .build();
 
       // Resolve service to build dep graph
-      container.service;
+      c.service;
 
-      const graph = container.inspect();
+      const graph = c.inspect();
       expect(graph.providers.db).toEqual({
         key: 'db',
         resolved: true,
@@ -29,25 +29,25 @@ describe('introspection', () => {
     });
 
     it('shows unresolved providers', () => {
-      const container = createContainer({
-        a: () => 1,
-        b: () => 2,
-      });
+      const c = container()
+        .add('a', () => 1)
+        .add('b', () => 2)
+        .build();
 
-      container.a; // only resolve a
+      c.a; // only resolve a
 
-      const graph = container.inspect();
+      const graph = c.inspect();
       expect(graph.providers.a.resolved).toBe(true);
       expect(graph.providers.b.resolved).toBe(false);
     });
 
     it('shows transient scope', () => {
-      const container = createContainer({
-        singleton: () => 1,
-        ephemeral: transient(() => 2),
-      });
+      const c = container()
+        .add('singleton', () => 1)
+        .addTransient('ephemeral', () => 2)
+        .build();
 
-      const graph = container.inspect();
+      const graph = c.inspect();
       expect(graph.providers.singleton.scope).toBe('singleton');
       expect(graph.providers.ephemeral.scope).toBe('transient');
     });
@@ -55,14 +55,14 @@ describe('introspection', () => {
 
   describe('describe()', () => {
     it('returns provider details', () => {
-      const container = createContainer({
-        db: () => 'pg',
-        repo: (c) => c.db,
-      });
+      const c = container()
+        .add('db', () => 'pg')
+        .add('repo', (c) => c.db)
+        .build();
 
-      container.repo;
+      c.repo;
 
-      const info = container.describe('repo');
+      const info = c.describe('repo');
       expect(info.key).toBe('repo');
       expect(info.resolved).toBe(true);
       expect(info.deps).toEqual(['db']);
@@ -70,8 +70,8 @@ describe('introspection', () => {
     });
 
     it('returns default info for unknown key', () => {
-      const container = createContainer({ a: () => 1 });
-      const info = container.describe('unknown' as any);
+      const c = container().add('a', () => 1).build();
+      const info = c.describe('unknown' as any);
       expect(info.resolved).toBe(false);
       expect(info.deps).toEqual([]);
     });
@@ -79,16 +79,16 @@ describe('introspection', () => {
 
   describe('health()', () => {
     it('returns container health', () => {
-      const container = createContainer({
-        a: () => 1,
-        b: () => 2,
-        c: () => 3,
-      });
+      const c = container()
+        .add('a', () => 1)
+        .add('b', () => 2)
+        .add('c', () => 3)
+        .build();
 
-      container.a;
-      container.b;
+      c.a;
+      c.b;
 
-      const health = container.health();
+      const health = c.health();
       expect(health.totalProviders).toBe(3);
       expect(health.resolved).toContain('a');
       expect(health.resolved).toContain('b');
@@ -98,14 +98,14 @@ describe('introspection', () => {
 
   describe('toString()', () => {
     it('returns a readable representation', () => {
-      const container = createContainer({
-        db: () => 'pg',
-        logger: () => 'log',
-      });
+      const c = container()
+        .add('db', () => 'pg')
+        .add('logger', () => 'log')
+        .build();
 
-      container.db;
+      c.db;
 
-      const str = container.toString();
+      const str = c.toString();
       expect(str).toContain('Container');
       expect(str).toContain('db');
       expect(str).toContain('(resolved)');

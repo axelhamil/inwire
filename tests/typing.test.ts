@@ -1,28 +1,27 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { createContainer, transient, ContainerConfigError, ProviderNotFoundError, CircularDependencyError, FactoryError, UndefinedReturnError, ReservedKeyError } from '../src/index.js';
-import type { DepsDefinition } from '../src/index.js';
+import { container, transient, ContainerConfigError, ProviderNotFoundError, CircularDependencyError, FactoryError, UndefinedReturnError, ReservedKeyError } from '../src/index.js';
 
 describe('TypeScript type inference', () => {
   it('infers correct types for simple factories', () => {
-    const container = createContainer({
-      num: () => 42,
-      str: () => 'hello',
-      obj: () => ({ x: 1, y: 2 }),
-    });
+    const c = container()
+      .add('num', () => 42)
+      .add('str', () => 'hello')
+      .add('obj', () => ({ x: 1, y: 2 }))
+      .build();
 
-    expectTypeOf(container.num).toEqualTypeOf<number>();
-    expectTypeOf(container.str).toEqualTypeOf<string>();
-    expectTypeOf(container.obj).toEqualTypeOf<{ x: number; y: number }>();
+    expectTypeOf(c.num).toEqualTypeOf<number>();
+    expectTypeOf(c.str).toEqualTypeOf<string>();
+    expectTypeOf(c.obj).toEqualTypeOf<{ x: number; y: number }>();
   });
 
   it('infers types through dependency chains', () => {
-    const container = createContainer({
-      base: () => 10,
-      doubled: (c) => c.base * 2,
-    });
+    const c = container()
+      .add('base', () => 10)
+      .add('doubled', (c) => c.base * 2)
+      .build();
 
     // doubled's type is inferred from the return of the factory
-    expect(typeof container.doubled).toBe('number');
+    expect(typeof c.doubled).toBe('number');
   });
 
   it('respects explicit return type annotations (interface-first)', () => {
@@ -35,39 +34,26 @@ describe('TypeScript type inference', () => {
       pgSpecific() { return 'pg'; }
     }
 
-    const container = createContainer({
-      repo: (): Repository => new PgRepo(),
-    });
+    const c = container()
+      .add('repo', (): Repository => new PgRepo())
+      .build();
 
     // The type is Repository, not PgRepo
-    expectTypeOf(container.repo).toEqualTypeOf<Repository>();
-
-    // This would be a type error:
-    // container.repo.pgSpecific(); // Property 'pgSpecific' does not exist on type 'Repository'
+    expectTypeOf(c.repo).toEqualTypeOf<Repository>();
   });
 
   it('transient preserves return type', () => {
-    const container = createContainer({
-      id: transient(() => crypto.randomUUID()),
-    });
+    const c = container()
+      .addTransient('id', () => crypto.randomUUID())
+      .build();
 
-    expectTypeOf(container.id).toEqualTypeOf<string>();
-  });
-
-  it('satisfies DepsDefinition constraint', () => {
-    const deps = {
-      logger: () => ({ log: (msg: string) => console.log(msg) }),
-      db: () => 'connection-string',
-    } satisfies DepsDefinition;
-
-    const container = createContainer(deps);
-    expect(container.db).toBe('connection-string');
+    expectTypeOf(c.id).toEqualTypeOf<string>();
   });
 
   it('scope extends the container type', () => {
-    const parent = createContainer({
-      db: () => 'postgres',
-    });
+    const parent = container()
+      .add('db', () => 'postgres')
+      .build();
 
     const child = parent.scope({
       requestId: () => 'req-123',
@@ -78,9 +64,9 @@ describe('TypeScript type inference', () => {
   });
 
   it('extend extends the container type', () => {
-    const base = createContainer({
-      a: () => 1,
-    });
+    const base = container()
+      .add('a', () => 1)
+      .build();
 
     const extended = base.extend({
       b: () => 'hello',
@@ -91,9 +77,9 @@ describe('TypeScript type inference', () => {
   });
 
   it('scope override replaces type instead of intersecting', () => {
-    const parent = createContainer({
-      value: () => 'hello',
-    });
+    const parent = container()
+      .add('value', () => 'hello')
+      .build();
 
     const child = parent.scope({
       value: () => 42,
@@ -103,9 +89,9 @@ describe('TypeScript type inference', () => {
   });
 
   it('extend override replaces type instead of intersecting', () => {
-    const base = createContainer({
-      value: () => 'hello',
-    });
+    const base = container()
+      .add('value', () => 'hello')
+      .build();
 
     const extended = base.extend({
       value: () => 42,
@@ -145,22 +131,103 @@ describe('TypeScript type inference', () => {
   });
 
   it('preload and reset accept keyof T', () => {
-    const container = createContainer({
-      db: () => 'postgres',
-      cache: () => new Map(),
-    });
+    const c = container()
+      .add('db', () => 'postgres')
+      .add('cache', () => new Map())
+      .build();
 
     // These should compile — keyof T restricts to 'db' | 'cache'
-    expectTypeOf(container.preload).parameter(0).toEqualTypeOf<'db' | 'cache'>();
-    expectTypeOf(container.reset).parameter(0).toEqualTypeOf<'db' | 'cache'>();
+    expectTypeOf(c.preload).parameter(0).toEqualTypeOf<'db' | 'cache'>();
+    expectTypeOf(c.reset).parameter(0).toEqualTypeOf<'db' | 'cache'>();
   });
 
-  it('createContainer with empty object produces typed container', () => {
-    const container = createContainer({});
+  it('empty builder produces typed container with methods', () => {
+    const c = container().build();
 
     // Container methods still exist on empty container
-    expectTypeOf(container.inspect).toBeFunction();
-    expectTypeOf(container.dispose).toBeFunction();
-    expectTypeOf(container.health).toBeFunction();
+    expectTypeOf(c.inspect).toBeFunction();
+    expectTypeOf(c.dispose).toBeFunction();
+    expectTypeOf(c.health).toBeFunction();
+  });
+});
+
+describe('Builder type safety', () => {
+  it('c in factory knows previously added deps', () => {
+    const c = container()
+      .add('a', () => 42)
+      .add('b', (c) => {
+        expectTypeOf(c.a).toEqualTypeOf<number>();
+        return c.a + 1;
+      })
+      .build();
+
+    expect(c.b).toBe(43);
+  });
+
+  it('contract mode constrains keys and return types', () => {
+    interface AppDeps {
+      logger: { log: (msg: string) => void };
+      db: string;
+    }
+
+    const c = container<AppDeps>()
+      .add('logger', () => ({ log: (msg: string) => {} }))
+      .add('db', () => 'postgres')
+      .build();
+
+    expectTypeOf(c.logger).toEqualTypeOf<{ log: (msg: string) => void }>();
+    expectTypeOf(c.db).toEqualTypeOf<string>();
+  });
+
+  it('instance (non-function) values are registered eagerly', () => {
+    const c = container()
+      .add('config', { port: 3000, host: 'localhost' })
+      .add('url', (c) => `${c.config.host}:${c.config.port}`)
+      .build();
+
+    expect(c.config).toEqual({ port: 3000, host: 'localhost' });
+    expect(c.url).toBe('localhost:3000');
+  });
+
+  it('addTransient works on builder', () => {
+    let counter = 0;
+    const c = container()
+      .addTransient('id', () => ++counter)
+      .build();
+
+    expect(c.id).toBe(1);
+    expect(c.id).toBe(2);
+  });
+
+  it('reserved key in add() throws runtime ReservedKeyError', () => {
+    expect(() =>
+      container().add('scope' as any, () => 'x'),
+    ).toThrow(ReservedKeyError);
+  });
+
+  it('c in scope/extend is typed as the parent', () => {
+    const app = container()
+      .add('logger', () => ({ log: (msg: string) => msg }))
+      .add('db', () => 'postgres')
+      .build();
+
+    const scoped = app.scope({
+      handler: (c) => {
+        expectTypeOf(c.logger).toEqualTypeOf<{ log: (msg: string) => string }>();
+        expectTypeOf(c.db).toEqualTypeOf<string>();
+        return 'handled';
+      },
+    });
+
+    expect(scoped.handler).toBe('handled');
+
+    const extended = app.extend({
+      cache: (c) => {
+        expectTypeOf(c.logger).toEqualTypeOf<{ log: (msg: string) => string }>();
+        return 'cached';
+      },
+    });
+
+    expect(extended.cache).toBe('cached');
   });
 });

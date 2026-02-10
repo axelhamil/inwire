@@ -1,42 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer } from '../src/index.js';
+import { container } from '../src/index.js';
 
 describe('lifecycle', () => {
   it('calls onInit when a dependency is first resolved', () => {
     let initialized = false;
 
-    const container = createContainer({
-      service: () => ({
+    const c = container()
+      .add('service', () => ({
         value: 42,
         onInit() { initialized = true; },
-      }),
-    });
+      }))
+      .build();
 
     expect(initialized).toBe(false);
-    container.service;
+    c.service;
     expect(initialized).toBe(true);
   });
 
   it('calls onDestroy on dispose for all resolved instances', async () => {
     const destroyed: string[] = [];
 
-    const container = createContainer({
-      db: () => ({
+    const c = container()
+      .add('db', () => ({
         onDestroy() { destroyed.push('db'); },
-      }),
-      cache: () => ({
+      }))
+      .add('cache', () => ({
         onDestroy() { destroyed.push('cache'); },
-      }),
-      unused: () => ({
+      }))
+      .add('unused', () => ({
         onDestroy() { destroyed.push('unused'); },
-      }),
-    });
+      }))
+      .build();
 
     // Only resolve db and cache
-    container.db;
-    container.cache;
+    c.db;
+    c.cache;
 
-    await container.dispose();
+    await c.dispose();
 
     expect(destroyed).toContain('db');
     expect(destroyed).toContain('cache');
@@ -46,17 +46,17 @@ describe('lifecycle', () => {
   it('disposes in reverse resolution order', async () => {
     const order: string[] = [];
 
-    const container = createContainer({
-      first: () => ({ onDestroy() { order.push('first'); } }),
-      second: () => ({ onDestroy() { order.push('second'); } }),
-      third: () => ({ onDestroy() { order.push('third'); } }),
-    });
+    const c = container()
+      .add('first', () => ({ onDestroy() { order.push('first'); } }))
+      .add('second', () => ({ onDestroy() { order.push('second'); } }))
+      .add('third', () => ({ onDestroy() { order.push('third'); } }))
+      .build();
 
-    container.first;
-    container.second;
-    container.third;
+    c.first;
+    c.second;
+    c.third;
 
-    await container.dispose();
+    await c.dispose();
 
     expect(order).toEqual(['third', 'second', 'first']);
   });
@@ -64,17 +64,17 @@ describe('lifecycle', () => {
   it('handles async onInit', () => {
     let connected = false;
 
-    const container = createContainer({
-      db: () => ({
+    const c = container()
+      .add('db', () => ({
         async onInit() {
           await new Promise((r) => setTimeout(r, 1));
           connected = true;
         },
-      }),
-    });
+      }))
+      .build();
 
     // Lazy resolution — onInit fires but since it's async it runs in background
-    container.db;
+    c.db;
     // We can't guarantee connected=true here without await
     // preload() is the way to await async init
   });
@@ -82,57 +82,57 @@ describe('lifecycle', () => {
   it('preload resolves dependencies eagerly', async () => {
     let initialized = false;
 
-    const container = createContainer({
-      service: () => {
+    const c = container()
+      .add('service', () => {
         initialized = true;
         return { value: 'ready' };
-      },
-    });
+      })
+      .build();
 
     expect(initialized).toBe(false);
-    await container.preload('service');
+    await c.preload('service');
     expect(initialized).toBe(true);
   });
 
   it('preload without args resolves all deps', async () => {
     const resolved: string[] = [];
 
-    const container = createContainer({
-      db: () => { resolved.push('db'); return 'db'; },
-      cache: () => { resolved.push('cache'); return 'cache'; },
-      logger: () => { resolved.push('logger'); return 'logger'; },
-    });
+    const c = container()
+      .add('db', () => { resolved.push('db'); return 'db'; })
+      .add('cache', () => { resolved.push('cache'); return 'cache'; })
+      .add('logger', () => { resolved.push('logger'); return 'logger'; })
+      .build();
 
     expect(resolved).toEqual([]);
-    await container.preload();
+    await c.preload();
     expect(resolved).toEqual(['db', 'cache', 'logger']);
   });
 
   it('preload without args calls onInit on all services', async () => {
     const inited: string[] = [];
 
-    const container = createContainer({
-      db: () => ({ onInit() { inited.push('db'); } }),
-      cache: () => ({ onInit() { inited.push('cache'); } }),
-    });
+    const c = container()
+      .add('db', () => ({ onInit() { inited.push('db'); } }))
+      .add('cache', () => ({ onInit() { inited.push('cache'); } }))
+      .build();
 
-    await container.preload();
+    await c.preload();
     expect(inited).toContain('db');
     expect(inited).toContain('cache');
   });
 
   it('async onInit errors are swallowed (fire-and-forget)', async () => {
-    const container = createContainer({
-      failing: () => ({
+    const c = container()
+      .add('failing', () => ({
         value: 'ok',
         async onInit() {
           throw new Error('init failed!');
         },
-      }),
-    });
+      }))
+      .build();
 
     // Should not throw — async error is swallowed
-    const instance = container.failing;
+    const instance = c.failing;
     expect(instance.value).toBe('ok');
 
     // Give the microtask queue time to settle
@@ -141,71 +141,71 @@ describe('lifecycle', () => {
   });
 
   it('preload surfaces async onInit errors', async () => {
-    const container = createContainer({
-      db: () => ({
+    const c = container()
+      .add('db', () => ({
         async onInit() {
           throw new Error('connection refused');
         },
-      }),
-    });
+      }))
+      .build();
 
     // preload should NOT throw because onInit is fire-and-forget even in resolve()
     // but preload does call resolve() which triggers onInit
     // The key behavior: preload resolves eagerly
-    await container.preload('db');
+    await c.preload('db');
 
     // The instance is resolved and cached despite async error
-    expect(container.describe('db').resolved).toBe(true);
+    expect(c.describe('db').resolved).toBe(true);
   });
 
   it('dispose clears cache — re-access calls factory again', async () => {
     let callCount = 0;
 
-    const container = createContainer({
-      service: () => {
+    const c = container()
+      .add('service', () => {
         callCount++;
         return { id: callCount };
-      },
-    });
+      })
+      .build();
 
-    expect(container.service.id).toBe(1);
-    expect(container.service.id).toBe(1); // cached
+    expect(c.service.id).toBe(1);
+    expect(c.service.id).toBe(1); // cached
 
-    await container.dispose();
+    await c.dispose();
 
     // After dispose, cache is cleared — factory runs again
-    expect(container.service.id).toBe(2);
+    expect(c.service.id).toBe(2);
     expect(callCount).toBe(2);
   });
 
   it('dispose calls async onDestroy and awaits it', async () => {
     let destroyed = false;
 
-    const container = createContainer({
-      service: () => ({
+    const c = container()
+      .add('service', () => ({
         async onDestroy() {
           await new Promise((r) => setTimeout(r, 5));
           destroyed = true;
         },
-      }),
-    });
+      }))
+      .build();
 
-    container.service;
-    await container.dispose();
+    c.service;
+    await c.dispose();
 
     expect(destroyed).toBe(true);
   });
 
   it('handles instances without lifecycle methods', async () => {
-    const container = createContainer({
-      plain: () => 'just a string',
-      number: () => 42,
-    });
+    const c = container()
+      .add('plain', () => 'just a string')
+      .add('number', () => 42)
+      .build();
 
-    container.plain;
-    container.number;
+    c.plain;
+    c.number;
 
     // Should not throw
-    await container.dispose();
+    await c.dispose();
   });
 });

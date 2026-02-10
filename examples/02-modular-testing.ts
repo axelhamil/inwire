@@ -1,47 +1,30 @@
 /**
  * Example 02 — Modular Testing
  *
- * Showcases: modules via spread, test overrides, reset, extend with transient.
+ * Showcases: free mode builder, instance values, test overrides, reset,
+ * extend with transient, runtime safety net.
  */
-import { createContainer, transient } from "../src/index.js";
+import { container, transient } from "../src/index.js";
 
-// ── Modules (plain objects of factories) ────────────────────────────────────
-//
-// Design trade-off: `c` is typed as `any` in every factory — TypeScript fully
-// infers the *resolved* container type (what you get from `container.xyz`), but
-// cannot circularly infer the container shape inside the factories that define it.
-//
-// This is deliberate: zero ceremony, no tokens, no decorators.
-// In exchange, inwire provides a robust runtime safety net:
-//   - ProviderNotFoundError with fuzzy suggestion ("Did you mean 'logger'?")
-//   - Full resolution chain in every error (a -> b -> c (not found))
-//   - Structured `hint` + `details` on all 7 error types
-//   - Duplicate key detection internally via health().warnings
-//   - health() warnings for scope mismatches (singleton depending on transient)
+// ── Build container with free-mode builder ──────────────────────────────────
 
-const shared = {
-  config: () => ({ appName: "MyApp", version: "1.0.0" }),
-  logger: () => ({
+const app = container()
+  .add("config", { appName: "MyApp", version: "1.0.0" }) // instance (eager)
+  .add("logger", () => ({
     log: (msg: string) => console.log(`[LOG] ${msg}`),
-  }),
-};
-
-const auth = {
-  tokenService: () => ({
+  }))
+  .add("tokenService", () => ({
     verify: (token: string) => token === "valid-token",
     sign: (userId: string) => `token-for-${userId}`,
-  }),
-  authMiddleware: (c: any) => ({
+  }))
+  .add("authMiddleware", (c) => ({
     authenticate: (token: string) => {
       const valid = c.tokenService.verify(token);
       c.logger.log(`auth ${valid ? "success" : "failure"}`);
       return valid;
     },
-  }),
-};
-
-const user = {
-  userRepo: () => ({
+  }))
+  .add("userRepo", () => ({
     users: [
       { id: "1", name: "Alice" },
       { id: "2", name: "Bob" },
@@ -49,65 +32,65 @@ const user = {
     findById(id: string) {
       return this.users.find((u) => u.id === id);
     },
-  }),
-  userService: (c: any) => ({
+  }))
+  .add("userService", (c) => ({
     getUser(id: string) {
       c.logger.log(`getUser(${id})`);
       return c.userRepo.findById(id);
     },
-  }),
-};
-
-const notification = {
-  emailService: () => ({
+  }))
+  .add("emailService", () => ({
     sent: [] as string[],
     send(to: string, msg: string) {
       this.sent.push(`${to}: ${msg}`);
       console.log(`[Email] → ${to}: ${msg}`);
     },
-  }),
-};
+  }))
+  .build();
 
-// ── 1. Compose modules via spread ───────────────────────────────────────────
+// ── 1. Use the container ────────────────────────────────────────────────────
 
 console.log("=== Compose modules ===");
-const container = createContainer({
-  ...shared,
-  ...auth,
-  ...user,
-  ...notification,
-});
+console.log(`app: ${app.config.appName} v${app.config.version}`);
 
-const alice = container.userService.getUser("1");
+const alice = app.userService.getUser("1");
 console.log(`found: ${alice?.name}`);
 
-container.authMiddleware.authenticate("valid-token");
+app.authMiddleware.authenticate("valid-token");
 
 // ── 2. Test overrides — new container with mocks ────────────────────────────
 
 console.log("\n=== Test overrides ===");
 
 function createTestContainer() {
-  return createContainer({
-    ...shared,
-    ...auth,
-    ...user,
-    ...notification,
-    // Override with mocks
-    emailService: () => ({
-      sent: [] as string[],
-      send(to: string, msg: string) {
-        this.sent.push(`${to}: ${msg}`);
-        // no actual sending
-      },
-    }),
-    userRepo: () => ({
+  return container()
+    .add("config", { appName: "TestApp", version: "0.0.1" })
+    .add("logger", () => ({ log: (_: string) => {} })) // silent logger
+    .add("tokenService", () => ({
+      verify: (_t: string) => true,
+      sign: (userId: string) => `test-token-${userId}`,
+    }))
+    .add("authMiddleware", (c) => ({
+      authenticate: (token: string) => c.tokenService.verify(token),
+    }))
+    .add("userRepo", () => ({
       users: [{ id: "99", name: "TestUser" }],
       findById(id: string) {
         return this.users.find((u) => u.id === id);
       },
-    }),
-  });
+    }))
+    .add("userService", (c) => ({
+      getUser(id: string) {
+        return c.userRepo.findById(id);
+      },
+    }))
+    .add("emailService", () => ({
+      sent: [] as string[],
+      send(to: string, msg: string) {
+        this.sent.push(`${to}: ${msg}`);
+      },
+    }))
+    .build();
 }
 
 // Test 1: isolated container
@@ -125,7 +108,7 @@ console.log("test2 reset: singletons invalidated");
 
 console.log("\n=== Extend with transient ===");
 
-const extended = container.extend({
+const extended = app.extend({
   requestId: transient(() => crypto.randomUUID()),
   timestamp: transient(() => Date.now()),
 });
@@ -137,25 +120,23 @@ console.log(
   `original logger still works: ${typeof extended.logger.log === "function"}`,
 );
 
-// ── 4. Health check ─────────────────────────────────────────────────────────
+// ── 4. Introspection ────────────────────────────────────────────────────────
+
+console.log("\n=== Graph ===");
+console.log(String(app));
+console.log(JSON.stringify(app.inspect(), null, 2));
 
 console.log("\n=== Health ===");
-const health = container.health();
+const health = app.health();
 console.log(`total providers: ${health.totalProviders}`);
 console.log(`resolved: ${health.resolved.length}`);
 console.log(`warnings: ${health.warnings.length}`);
 
-// ── 5. Runtime safety net (the trade-off for `c: any`) ─────────────────────
-//
-// Since separate modules use `c: any`, typos aren't caught at compile time.
-// But inwire catches them at runtime with actionable diagnostics:
+// ── 5. Runtime safety net ───────────────────────────────────────────────────
 
 console.log("\n=== Runtime safety net ===");
 try {
-  // Simulates a typo in a module factory: 'loger' instead of 'logger'.
-  // With `c: any` the compiler won't catch it, but inwire will — at runtime,
-  // with a fuzzy suggestion pointing to the correct key.
-  const withBug = container.extend({
+  const withBug = app.extend({
     broken: (c: any) => c.loger.log("oops"),
   });
   withBug.broken;

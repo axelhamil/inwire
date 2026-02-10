@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer } from '../src/index.js';
+import { container } from '../src/index.js';
 
 describe('scope', () => {
   it('creates a child container inheriting parent deps', () => {
-    const parent = createContainer({
-      db: () => ({ name: 'main-db' }),
-      logger: () => ({ log: (msg: string) => msg }),
-    });
+    const parent = container()
+      .add('db', () => ({ name: 'main-db' }))
+      .add('logger', () => ({ log: (msg: string) => msg }))
+      .build();
 
     const child = parent.scope({
       requestId: () => 'req-123',
@@ -21,9 +21,9 @@ describe('scope', () => {
     let parentCount = 0;
     let childCount = 0;
 
-    const parent = createContainer({
-      shared: () => ++parentCount,
-    });
+    const parent = container()
+      .add('shared', () => ++parentCount)
+      .build();
 
     // Resolve in parent first
     expect(parent.shared).toBe(1);
@@ -39,9 +39,9 @@ describe('scope', () => {
   });
 
   it('child can override parent deps', () => {
-    const parent = createContainer({
-      greeting: () => 'hello',
-    });
+    const parent = container()
+      .add('greeting', () => 'hello')
+      .build();
 
     const child = parent.scope({
       greeting: () => 'bonjour',
@@ -52,9 +52,9 @@ describe('scope', () => {
   });
 
   it('child can depend on both parent and own deps', () => {
-    const parent = createContainer({
-      db: () => 'postgres',
-    });
+    const parent = container()
+      .add('db', () => 'postgres')
+      .build();
 
     const child = parent.scope({
       requestId: () => 'req-456',
@@ -65,9 +65,9 @@ describe('scope', () => {
   });
 
   it('deeply nested scopes inherit from grandparent', () => {
-    const root = createContainer({
-      db: () => 'root-db',
-    });
+    const root = container()
+      .add('db', () => 'root-db')
+      .build();
 
     const child = root.scope({
       logger: () => 'child-logger',
@@ -83,9 +83,9 @@ describe('scope', () => {
   });
 
   it('nested scope overrides propagate correctly', () => {
-    const root = createContainer({
-      env: () => 'production',
-    });
+    const root = container()
+      .add('env', () => 'production')
+      .build();
 
     const child = root.scope({
       env: () => 'staging',
@@ -101,9 +101,9 @@ describe('scope', () => {
   });
 
   it('named scope: toString() displays the name', () => {
-    const parent = createContainer({
-      db: () => 'pg',
-    });
+    const parent = container()
+      .add('db', () => 'pg')
+      .build();
 
     const child = parent.scope(
       { requestId: () => 'req-1' },
@@ -116,9 +116,9 @@ describe('scope', () => {
   });
 
   it('named scope: inspect() contains the name', () => {
-    const parent = createContainer({
-      db: () => 'pg',
-    });
+    const parent = container()
+      .add('db', () => 'pg')
+      .build();
 
     const child = parent.scope(
       { requestId: () => 'req-1' },
@@ -130,9 +130,9 @@ describe('scope', () => {
   });
 
   it('unnamed scope: behavior unchanged', () => {
-    const parent = createContainer({
-      db: () => 'pg',
-    });
+    const parent = container()
+      .add('db', () => 'pg')
+      .build();
 
     const child = parent.scope({ requestId: () => 'req-1' });
 
@@ -145,11 +145,11 @@ describe('scope', () => {
     let parentDestroyed = false;
     let childDestroyed = false;
 
-    const parent = createContainer({
-      parentService: () => ({
+    const parent = container()
+      .add('parentService', () => ({
         onDestroy: () => { parentDestroyed = true; },
-      }),
-    });
+      }))
+      .build();
 
     // Resolve parent service
     parent.parentService;

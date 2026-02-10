@@ -1,70 +1,47 @@
-import type { Container, DepsDefinition, Factory, ResolvedDeps, ScopeOptions } from '../domain/types.js';
+import type { Container, Factory, ScopeOptions } from '../domain/types.js';
 import { hasOnDestroy } from '../domain/lifecycle.js';
 import { Validator } from '../domain/validation.js';
-import { Resolver } from '../infrastructure/proxy-handler.js';
+import { Resolver } from '../infrastructure/resolver.js';
 import { Introspection } from './introspection.js';
-import { createScope } from './scope.js';
 
 const validator = new Validator();
 
 /**
- * Creates a dependency injection container from an object of factory functions.
- * Each factory receives the container and returns an instance.
- * Dependencies are resolved lazily and cached as singletons by default.
- *
- * @example
- * ```typescript
- * const container = createContainer({
- *   logger: () => new LoggerService(),
- *   db: () => new Database(process.env.DB_URL!),
- *   userRepo: (c): UserRepository => new PgUserRepo(c.db),
- *   userService: (c) => new UserService(c.userRepo, c.logger),
- * });
- *
- * container.userService; // type: UserService — lazy, singleton, fully resolved
- * ```
- */
-export function createContainer<T extends DepsDefinition>(
-  defs: T,
-): Container<ResolvedDeps<T>> {
-  // Validate config
-  validator.validateConfig(defs);
-
-  // Build factories map
-  const factories = new Map<string, Factory>();
-  for (const [key, factory] of Object.entries(defs)) {
-    factories.set(key, factory as Factory);
-  }
-
-  // Detect duplicate keys (warn, don't throw)
-  // This is useful when spreading multiple modules
-  // We check by looking at the property descriptor — if a key was overwritten
-  // during spread, JS already picked the last one. We can't detect this post-spread,
-  // so the user needs to use detectDuplicateKeys() explicitly or we warn at a higher level.
-
-  const resolver = new Resolver(factories);
-  return buildContainerProxy(resolver) as Container<ResolvedDeps<T>>;
-}
-
-/**
  * Builds the Proxy-based container from a Resolver.
- * Used by both `createContainer` and `createScope`.
+ * Scope and extend are inlined here.
  * @internal
  */
-export function buildContainerProxy(resolver: Resolver): Container<any> {
+export function buildContainerProxy(
+  resolver: Resolver,
+  builderFactory?: () => { _toRecord(): Record<string, (c: any) => any> },
+): Container<any> {
   const introspection = new Introspection(resolver);
   const methods = {
-    scope: (extra: DepsDefinition, options?: ScopeOptions) => createScope(resolver, extra, options),
+    scope: (extra: Record<string, (c: any) => any>, options?: ScopeOptions) => {
+      const childFactories = new Map<string, Factory>();
+      for (const [key, factory] of Object.entries(extra)) {
+        childFactories.set(key, factory as Factory);
+      }
+      const childResolver = new Resolver(childFactories, new Map(), resolver, options?.name);
+      return buildContainerProxy(childResolver, builderFactory);
+    },
 
-    extend: (extra: DepsDefinition) => {
+    extend: (extra: Record<string, (c: any) => any>) => {
       validator.validateConfig(extra);
       const merged = new Map(resolver.getFactories());
       for (const [key, factory] of Object.entries(extra)) {
         merged.set(key, factory as Factory);
       }
-      // Share existing cache (singletons already resolved)
       const newResolver = new Resolver(merged, new Map(resolver.getCache()));
-      return buildContainerProxy(newResolver);
+      return buildContainerProxy(newResolver, builderFactory);
+    },
+
+    module: (fn: (b: any) => any) => {
+      if (!builderFactory) throw new Error('module() is not available');
+      const builder = builderFactory();
+      const result = fn(builder);
+      const record = result._toRecord();
+      return methods.extend(record);
     },
 
     preload: async (...keys: string[]) => {
@@ -88,7 +65,6 @@ export function buildContainerProxy(resolver: Resolver): Container<any> {
 
     dispose: async () => {
       const cache = resolver.getCache();
-      // Dispose in reverse order of resolution (LIFO)
       const entries = [...cache.entries()].reverse();
       for (const [, instance] of entries) {
         if (hasOnDestroy(instance)) {
@@ -112,12 +88,10 @@ export function buildContainerProxy(resolver: Resolver): Container<any> {
 
         const key = prop;
 
-        // Container methods
         if (key in methods) {
           return methods[key as keyof typeof methods];
         }
 
-        // Dependency resolution
         return resolver.resolve(key);
       },
 

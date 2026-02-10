@@ -1,26 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer, transient } from '../src/index.js';
+import { container, transient } from '../src/index.js';
 
 describe('transient', () => {
   it('creates a new instance on every access', () => {
     let counter = 0;
-    const container = createContainer({
-      id: transient(() => ++counter),
-    });
+    const c = container()
+      .addTransient('id', () => ++counter)
+      .build();
 
-    expect(container.id).toBe(1);
-    expect(container.id).toBe(2);
-    expect(container.id).toBe(3);
+    expect(c.id).toBe(1);
+    expect(c.id).toBe(2);
+    expect(c.id).toBe(3);
   });
 
   it('transient deps can access singleton deps', () => {
-    const container = createContainer({
-      prefix: () => 'REQ',
-      requestId: transient((c) => `${c.prefix}-${Math.random()}`),
-    });
+    const c = container()
+      .add('prefix', () => 'REQ')
+      .addTransient('requestId', (c) => `${c.prefix}-${Math.random()}`)
+      .build();
 
-    const id1 = container.requestId as string;
-    const id2 = container.requestId as string;
+    const id1 = c.requestId;
+    const id2 = c.requestId;
 
     expect(id1).toMatch(/^REQ-/);
     expect(id2).toMatch(/^REQ-/);
@@ -29,14 +29,14 @@ describe('transient', () => {
 
   it('transient factory receives the container on each call', () => {
     let callCount = 0;
-    const container = createContainer({
-      counter: transient(() => ++callCount),
-      stamped: transient((c) => `stamp-${c.counter}`),
-    });
+    const c = container()
+      .addTransient('counter', () => ++callCount)
+      .addTransient('stamped', (c) => `stamp-${c.counter}`)
+      .build();
 
     // Each access to stamped creates a new instance of both stamped and counter
-    expect(container.stamped).toBe('stamp-1');
-    expect(container.stamped).toBe('stamp-2');
+    expect(c.stamped).toBe('stamp-1');
+    expect(c.stamped).toBe('stamp-2');
   });
 
   it('transient marker symbol is present on wrapped factory', () => {
@@ -54,12 +54,12 @@ describe('transient', () => {
   });
 
   it('inspect shows transient scope', () => {
-    const container = createContainer({
-      singleton: () => 'cached',
-      ephemeral: transient(() => 'new-each-time'),
-    });
+    const c = container()
+      .add('singleton', () => 'cached')
+      .addTransient('ephemeral', () => 'new-each-time')
+      .build();
 
-    const graph = container.inspect();
+    const graph = c.inspect();
     expect(graph.providers.singleton.scope).toBe('singleton');
     expect(graph.providers.ephemeral.scope).toBe('transient');
   });

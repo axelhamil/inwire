@@ -1,20 +1,28 @@
 # inwire
 
-> Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens.
+> Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
 > Proxy-based lazy singleton resolution. ~4.7KB gzipped, 0 runtime deps.
 
-inwire uses factory functions `(container) => instance` as the single abstraction. Property access on the container triggers lazy resolution through a Proxy. Instances are cached as singletons by default. TypeScript infers the full container type from the factory definitions — no manual type wiring. Built-in introspection methods return serializable JSON, making the dependency graph directly consumable by LLMs and AI tooling.
+inwire uses a fluent builder to define dependencies one by one: `container().add('key', factory).build()`. Each `.add()` accumulates the type — the `c` parameter in every factory knows about all previously registered dependencies. Property access on the built container triggers lazy resolution through a Proxy. Instances are cached as singletons by default. Built-in introspection methods return serializable JSON, making the dependency graph directly consumable by LLMs and AI tooling.
 
 ## Core API
 
-- `createContainer(defs)` — Creates a DI container from an object of factory functions. Returns a fully-typed Proxy.
-- `transient(factory)` — Marks a factory as transient (new instance on every access, no caching).
-- `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object. Duplicate keys are also surfaced internally via `health().warnings`.
+- `container<T?>()` — Creates a `ContainerBuilder`. Pass interface `T` for contract mode (constrains keys and return types).
+- `transient(factory)` — Marks a factory as transient for scope/extend (new instance on every access, no caching).
+- `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object.
+
+## ContainerBuilder Methods
+
+- `.add(key, factory)` — Register a dependency. Factory `(c) => value` is lazy; non-function value is eager (instance).
+- `.addTransient(key, factory)` — Register a transient dependency (fresh instance on every access).
+- `.addModule(fn)` — Apply a module `(builder) => builder` pre-build.
+- `.build()` — Build and return the container.
 
 ## Container Methods
 
 - `.scope(extra, options?)` — Creates a child container with additional deps. Child inherits parent singletons. Pass `{ name }` for debugging/introspection.
 - `.extend(extra)` — Returns a new container with merged factories. Shares existing singleton cache.
+- `.module(fn)` — Applies a module post-build using the builder for typed `c`. Semantically equivalent to `extend()` but with incremental type accumulation. `fn` receives a `ContainerBuilder` seeded with the container's type.
 - `.preload(...keys)` — Eagerly resolves specific dependencies, or all if no keys given. Only way to await async `onInit()`.
 - `.reset(...keys)` — Invalidates cached singletons, forcing re-creation on next access. Does not affect parent scopes.
 - `.inspect()` — Returns the full dependency graph as `ContainerGraph` (serializable JSON).
@@ -25,9 +33,8 @@ inwire uses factory functions `(container) => instance` as the single abstractio
 ## Types
 
 - `Container<T>` — Resolved deps + container methods
-- `Factory<T>` — `(container: any) => T`
-- `DepsDefinition` — `Record<string, Factory>`
-- `ResolvedDeps<T>` — Maps each key to its factory's return type
+- `ContainerBuilder<TContract, TBuilt>` — Fluent builder class (also used in `module()` callbacks)
+- `IContainer<T>` — Container methods interface
 - `OnInit` — Interface: `onInit(): void | Promise<void>`
 - `OnDestroy` — Interface: `onDestroy(): void | Promise<void>`
 - `ScopeOptions` — `{ name?: string }` — options for `scope()`
@@ -40,8 +47,8 @@ inwire uses factory functions `(container) => instance` as the single abstractio
 
 All errors extend `ContainerError` and include `hint` (actionable fix) and `details` (structured context).
 
-- `ContainerConfigError` — Non-function value in deps definition
-- `ReservedKeyError` — Reserved container method name used as dependency key (`reset` included)
+- `ContainerConfigError` — Non-function value in deps definition (scope/extend)
+- `ReservedKeyError` — Reserved container method name used as dependency key
 - `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion)
 - `CircularDependencyError` — Circular dependency detected in resolution chain
 - `UndefinedReturnError` — Factory returned `undefined`

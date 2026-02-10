@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer, transient } from '../src/index.js';
+import { container, transient } from '../src/index.js';
 
 describe('extend', () => {
   it('shares existing singleton cache with extended container', () => {
     let callCount = 0;
 
-    const base = createContainer({
-      logger: () => {
+    const base = container()
+      .add('logger', () => {
         callCount++;
         return { id: callCount };
-      },
-    });
+      })
+      .build();
 
     // Resolve in base — cached
     const baseLogger = base.logger;
@@ -26,9 +26,9 @@ describe('extend', () => {
   });
 
   it('new singletons in extended do NOT propagate back to original', () => {
-    const base = createContainer({
-      a: () => 'a-value',
-    });
+    const base = container()
+      .add('a', () => 'a-value')
+      .build();
 
     const extended = base.extend({
       b: () => 'b-value',
@@ -42,9 +42,9 @@ describe('extend', () => {
   });
 
   it('does not mutate the original container', () => {
-    const base = createContainer({
-      logger: () => 'log',
-    });
+    const base = container()
+      .add('logger', () => 'log')
+      .build();
 
     const extended = base.extend({
       db: () => 'pg',
@@ -60,9 +60,9 @@ describe('extend', () => {
   });
 
   it('extended container can depend on base deps', () => {
-    const base = createContainer({
-      config: () => ({ host: 'localhost' }),
-    });
+    const base = container()
+      .add('config', () => ({ host: 'localhost' }))
+      .build();
 
     const extended = base.extend({
       db: (c) => `db@${c.config.host}`,
@@ -72,9 +72,9 @@ describe('extend', () => {
   });
 
   it('chaining multiple extends', () => {
-    const base = createContainer({
-      a: () => 'a',
-    });
+    const base = container()
+      .add('a', () => 'a')
+      .build();
 
     const ext1 = base.extend({ b: (c) => `${c.a}+b` });
     const ext2 = ext1.extend({ c: (c) => `${c.b}+c` });
@@ -82,10 +82,10 @@ describe('extend', () => {
     expect(ext2.c).toBe('a+b+c');
   });
 
-  it('extend validates config like createContainer', () => {
-    const base = createContainer({
-      a: () => 1,
-    });
+  it('extend validates config like builder', () => {
+    const base = container()
+      .add('a', () => 1)
+      .build();
 
     expect(() => base.extend({ bad: 'not a function' } as any)).toThrow();
   });
@@ -93,12 +93,12 @@ describe('extend', () => {
   describe('scope vs extend differences', () => {
     it('scope creates parent-child chain, extend creates flat merge', () => {
       let parentCallCount = 0;
-      const base = createContainer({
-        service: () => {
+      const base = container()
+        .add('service', () => {
           parentCallCount++;
           return { id: parentCallCount };
-        },
-      });
+        })
+        .build();
 
       // Resolve in base
       base.service;
@@ -116,9 +116,9 @@ describe('extend', () => {
     });
 
     it('scope isolates child singletons, extend does not pollute base', () => {
-      const base = createContainer({
-        shared: () => 'shared',
-      });
+      const base = container()
+        .add('shared', () => 'shared')
+        .build();
 
       const scoped = base.scope({
         childOnly: () => 'scoped-value',

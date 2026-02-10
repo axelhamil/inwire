@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createContainer,
+  container,
   ContainerConfigError,
   ReservedKeyError,
   ProviderNotFoundError,
@@ -10,47 +10,16 @@ import {
 } from '../src/index.js';
 
 describe('errors', () => {
-  describe('ContainerConfigError', () => {
-    it('throws when a non-function value is provided', () => {
-      expect(() =>
-        createContainer({ apiKey: 'sk-123' } as any),
-      ).toThrow(ContainerConfigError);
-    });
-
-    it('includes hint with wrap suggestion', () => {
-      try {
-        createContainer({ apiKey: 'sk-123' } as any);
-        expect.fail('should throw');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ContainerConfigError);
-        const err = e as ContainerConfigError;
-        expect(err.hint).toContain('Wrap it');
-        expect(err.details.key).toBe('apiKey');
-        expect(err.details.actualType).toBe('string');
-      }
-    });
-
-    it('detects number values', () => {
-      try {
-        createContainer({ port: 3000 } as any);
-        expect.fail('should throw');
-      } catch (e) {
-        const err = e as ContainerConfigError;
-        expect(err.details.actualType).toBe('number');
-      }
-    });
-  });
-
   describe('ReservedKeyError', () => {
-    it('throws when using a reserved key', () => {
+    it('throws when using a reserved key in builder', () => {
       expect(() =>
-        createContainer({ inspect: () => 'foo' }),
+        container().add('inspect' as any, () => 'foo').build(),
       ).toThrow(ReservedKeyError);
     });
 
     it('includes rename suggestion', () => {
       try {
-        createContainer({ dispose: () => 'foo' });
+        container().add('dispose' as any, () => 'foo').build();
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(ReservedKeyError);
@@ -63,7 +32,7 @@ describe('errors', () => {
     for (const key of ['inspect', 'describe', 'scope', 'dispose', 'health', 'extend', 'preload']) {
       it(`rejects reserved key '${key}'`, () => {
         expect(() =>
-          createContainer({ [key]: () => 'x' }),
+          container().add(key as any, () => 'x').build(),
         ).toThrow(ReservedKeyError);
       });
     }
@@ -71,21 +40,21 @@ describe('errors', () => {
 
   describe('ProviderNotFoundError', () => {
     it('throws when accessing a non-existent key', () => {
-      const container = createContainer({
-        logger: () => 'log',
-      });
+      const c = container()
+        .add('logger', () => 'log')
+        .build();
 
-      expect(() => (container as any).nonExistent).toThrow(ProviderNotFoundError);
+      expect(() => (c as any).nonExistent).toThrow(ProviderNotFoundError);
     });
 
     it('includes registered keys and fuzzy suggestion', () => {
-      const container = createContainer({
-        userRepository: () => 'repo',
-        logger: () => 'log',
-      });
+      const c = container()
+        .add('userRepository', () => 'repo')
+        .add('logger', () => 'log')
+        .build();
 
       try {
-        (container as any).userRepo;
+        (c as any).userRepo;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(ProviderNotFoundError);
@@ -96,12 +65,12 @@ describe('errors', () => {
     });
 
     it('shows resolution chain for nested failures', () => {
-      const container = createContainer({
-        service: (c) => c.missingDep,
-      });
+      const c = container()
+        .add('service', (c: any) => c.missingDep)
+        .build();
 
       try {
-        container.service;
+        c.service;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(ProviderNotFoundError);
@@ -114,19 +83,19 @@ describe('errors', () => {
 
   describe('UndefinedReturnError', () => {
     it('throws when factory returns undefined', () => {
-      const container = createContainer({
-        broken: () => undefined as any,
-      });
+      const c = container()
+        .add('broken', () => undefined as any)
+        .build();
 
-      expect(() => container.broken).toThrow(UndefinedReturnError);
+      expect(() => c.broken).toThrow(UndefinedReturnError);
     });
 
     it('includes hint about missing return', () => {
       try {
-        const container = createContainer({
-          broken: () => undefined as any,
-        });
-        container.broken;
+        const c = container()
+          .add('broken', () => undefined as any)
+          .build();
+        c.broken;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(UndefinedReturnError);
@@ -138,19 +107,19 @@ describe('errors', () => {
 
   describe('FactoryError', () => {
     it('wraps errors thrown by factories', () => {
-      const container = createContainer({
-        failing: () => { throw new Error('Connection refused'); },
-      });
+      const c = container()
+        .add('failing', () => { throw new Error('Connection refused'); })
+        .build();
 
-      expect(() => container.failing).toThrow(FactoryError);
+      expect(() => c.failing).toThrow(FactoryError);
     });
 
     it('preserves original error message', () => {
       try {
-        const container = createContainer({
-          failing: () => { throw new Error('Connection refused'); },
-        });
-        container.failing;
+        const c = container()
+          .add('failing', () => { throw new Error('Connection refused'); })
+          .build();
+        c.failing;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(FactoryError);
@@ -162,14 +131,14 @@ describe('errors', () => {
     });
 
     it('shows resolution chain for nested factory errors', () => {
-      const container = createContainer({
-        db: () => { throw new Error('ECONNREFUSED'); },
-        repo: (c) => c.db,
-        service: (c) => c.repo,
-      });
+      const c = container()
+        .add('db', () => { throw new Error('ECONNREFUSED'); })
+        .add('repo', (c: any) => c.db)
+        .add('service', (c: any) => c.repo)
+        .build();
 
       try {
-        container.service;
+        c.service;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(FactoryError);
@@ -181,13 +150,13 @@ describe('errors', () => {
 
   describe('CircularDependencyError details', () => {
     it('has key, chain, and cycle in details', () => {
-      const container = createContainer({
-        a: (c) => c.b,
-        b: (c) => c.a,
-      });
+      const c = container()
+        .add('a', (c: any) => c.b)
+        .add('b', (c: any) => c.a)
+        .build();
 
       try {
-        container.a;
+        c.a;
         expect.fail('should throw');
       } catch (e) {
         expect(e).toBeInstanceOf(ContainerError);
@@ -202,12 +171,12 @@ describe('errors', () => {
 
   describe('UndefinedReturnError details', () => {
     it('has key and chain in details', () => {
-      const container = createContainer({
-        broken: () => undefined as any,
-      });
+      const c = container()
+        .add('broken', () => undefined as any)
+        .build();
 
       try {
-        container.broken;
+        c.broken;
         expect.fail('should throw');
       } catch (e) {
         const err = e as UndefinedReturnError;
@@ -220,12 +189,12 @@ describe('errors', () => {
 
   describe('FactoryError details', () => {
     it('has key, chain, and originalError in details', () => {
-      const container = createContainer({
-        failing: () => { throw new Error('boom'); },
-      });
+      const c = container()
+        .add('failing', () => { throw new Error('boom'); })
+        .build();
 
       try {
-        container.failing;
+        c.failing;
         expect.fail('should throw');
       } catch (e) {
         const err = e as FactoryError;
@@ -240,15 +209,15 @@ describe('errors', () => {
   describe('ReservedKeyError for toString', () => {
     it('rejects toString as a dependency key', () => {
       expect(() =>
-        createContainer({ toString: () => 'x' }),
+        container().add('toString' as any, () => 'x').build(),
       ).toThrow(ReservedKeyError);
     });
   });
 
   describe('all errors extend ContainerError', () => {
-    it('ContainerConfigError is a ContainerError', () => {
+    it('ReservedKeyError is a ContainerError', () => {
       try {
-        createContainer({ x: 123 } as any);
+        container().add('inspect' as any, () => 'x').build();
       } catch (e) {
         expect(e).toBeInstanceOf(ContainerError);
       }
@@ -256,7 +225,7 @@ describe('errors', () => {
 
     it('ProviderNotFoundError is a ContainerError', () => {
       try {
-        const c = createContainer({ a: () => 1 });
+        const c = container().add('a', () => 1).build();
         (c as any).missing;
       } catch (e) {
         expect(e).toBeInstanceOf(ContainerError);

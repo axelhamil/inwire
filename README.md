@@ -1,6 +1,6 @@
 # inwire
 
-Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens. Built-in introspection for AI tooling and debugging.
+Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens. Built-in introspection for AI tooling and debugging.
 
 [![NPM Version](https://img.shields.io/npm/v/inwire)](https://www.npmjs.com/package/inwire)
 [![CI](https://img.shields.io/github/actions/workflow/status/axelhamil/inwire/ci.yml)](https://github.com/axelhamil/inwire/actions)
@@ -19,21 +19,57 @@ npm i inwire
 ## Quick Start
 
 ```typescript
-import { createContainer } from 'inwire';
+import { container } from 'inwire';
 
-const container = createContainer({
-  logger: () => new LoggerService(),
-  db: () => new Database(process.env.DB_URL!),
-  userRepo: (c): UserRepository => new PgUserRepo(c.db),
-  userService: (c) => new UserService(c.userRepo, c.logger),
-});
+const app = container()
+  .add('logger', () => new LoggerService())
+  .add('db', (c) => new Database(c.logger))
+  .add('userService', (c) => new UserService(c.db, c.logger))
+  .build();
 
-container.userService; // lazy, singleton, fully typed
+app.userService; // lazy, singleton, fully typed
+// c.logger in the db factory is typed as LoggerService
 ```
 
-That's it. Every dependency is a factory function `(container) => instance`. Access a property, get a singleton. TypeScript infers everything.
+Each `.add()` accumulates the type — `c` in every factory knows about all previously registered dependencies.
 
-## ⚠️ Important: Async Lifecycle
+## Contract Mode (Interface-First)
+
+Pass an interface to the builder to constrain keys and return types at compile time:
+
+```typescript
+interface AppDeps {
+  ILogger: Logger;
+  IDatabase: Database;
+  IUserService: UserService;
+}
+
+const app = container<AppDeps>()
+  .add('ILogger', () => new ConsoleLogger())         // key: autocomplete keyof AppDeps
+  .add('IDatabase', (c) => new PgDatabase(c.ILogger)) // return must be Database
+  .add('IUserService', (c) => new UserService(c.IDatabase, c.ILogger))
+  .build();
+
+app.ILogger; // typed as Logger (not ConsoleLogger)
+```
+
+The string key acts as a token (like NestJS), but type-safe at compile time.
+
+## Instance Values (Eager)
+
+Non-function values are registered eagerly:
+
+```typescript
+const app = container()
+  .add('config', { port: 3000, host: 'localhost' })  // object, not factory — eager
+  .add('db', (c) => new Database(c.config))           // factory — lazy
+  .build();
+```
+
+Convention: `typeof value === 'function'` → factory (lazy). Otherwise → instance (eager, wrapped in `() => value`).
+To register a function as a value: `.add('fn', () => myFunction)`.
+
+## Async Lifecycle
 
 Property access on the container is **synchronous**. If your service implements `onInit()` with an async function, it will be called but **not awaited** — errors are silently swallowed and your service may be used before it's ready.
 
@@ -44,21 +80,19 @@ class Database implements OnInit {
   async onInit() { await this.connect(); }
 }
 
-const container = createContainer({
-  db: () => new Database(),
-});
+const app = container()
+  .add('db', () => new Database())
+  .build();
 
-// ❌ BAD — onInit() fires but is NOT awaited, errors are lost
-container.db;
+// BAD — onInit() fires but is NOT awaited, errors are lost
+app.db;
 
-// ✅ GOOD — onInit() is awaited, errors surface immediately
-await container.preload('db');
-container.db; // safe to use, fully initialized
+// GOOD — onInit() is awaited, errors surface immediately
+await app.preload('db');
+app.db; // safe to use, fully initialized
 ```
 
 ## Why use a DI container?
-
-Most JS/TS projects wire dependencies through direct imports. A DI container gives you three things imports don't:
 
 - **Testability** — swap any dependency for a mock at creation time, no monkey-patching or `jest.mock`
 - **Decoupling** — program against interfaces, not concrete imports; swap implementations without touching consumers
@@ -68,117 +102,73 @@ Most JS/TS projects wire dependencies through direct imports. A DI container giv
 
 ### Lazy Singletons (default)
 
-Factories run on first access and the result is cached forever. No eager init, no manual wiring.
-
 ```typescript
-const container = createContainer({
-  db: () => new Database(process.env.DB_URL!),
-});
+const app = container()
+  .add('db', () => new Database(process.env.DB_URL!))
+  .build();
 
-container.db; // creates Database
-container.db; // same instance (cached)
+app.db; // creates Database
+app.db; // same instance (cached)
 ```
 
-### Dependency Inversion
+### Transient
 
-Annotate the return type to program against an interface:
+Fresh instance on every access via `addTransient()`:
 
 ```typescript
-const container = createContainer({
-  userRepo: (c): UserRepository => new PgUserRepo(c.db),
-  //            ^^^^^^^^^^^^^^^^^
-  //            contract, not implementation
-});
+import { container } from 'inwire';
 
-container.userRepo; // typed as UserRepository
+const app = container()
+  .add('logger', () => new LoggerService())
+  .addTransient('requestId', () => crypto.randomUUID())
+  .build();
+
+app.logger === app.logger;         // true  — singleton
+app.requestId === app.requestId;   // false — new every time
 ```
 
-### Modules = Spread Objects
-
-Group related factories into plain objects and spread them:
+`transient()` wrapper is still available for `scope()`/`extend()`:
 
 ```typescript
-const dbModule = {
-  db: () => new Database(process.env.DB_URL!),
-  redis: () => new Redis(process.env.REDIS_URL!),
-};
+import { transient } from 'inwire';
 
-const serviceModule = {
-  userService: (c) => new UserService(c.db),
-};
-
-const container = createContainer({
-  ...dbModule,
-  ...serviceModule,
-});
-```
-
-> **Design trade-off**: the `c` parameter in every factory is typed as `any`. TypeScript fully infers the **resolved container** type (what you get from `container.userService`), but cannot circularly infer the container shape inside the factories that define it. This is a deliberate choice — zero ceremony, no tokens, no decorators. In exchange, inwire provides a robust runtime safety net: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches. See [examples/02-modular-testing.ts](examples/02-modular-testing.ts) for a full walkthrough.
-
-### Test Overrides
-
-Replace any dependency with a mock at container creation:
-
-```typescript
-const container = createContainer({
-  ...productionDeps,
-  db: () => new InMemoryDatabase(), // override
+const extended = app.extend({
+  timestamp: transient(() => Date.now()),
 });
 ```
 
 ### Scopes
 
-Create child containers for request-level isolation. The child inherits all parent singletons and adds its own:
+Create child containers for request-level isolation:
 
 ```typescript
-const container = createContainer({
-  logger: () => new LoggerService(),
-  db: () => new Database(),
-});
+const app = container()
+  .add('logger', () => new LoggerService())
+  .add('db', () => new Database())
+  .build();
 
-// Per-request child container
-const request = container.scope({
+const request = app.scope({
   requestId: () => crypto.randomUUID(),
-  currentUser: () => getCurrentUser(),
+  handler: (c) => new Handler(c.logger),  // c typed as typeof app
 });
 
-request.requestId;   // scoped singleton (unique to this child)
-request.logger;      // inherited from parent
+request.requestId; // scoped singleton
+request.logger;    // inherited from parent
 ```
 
 #### Named Scopes
 
-Pass an options object to name a scope for debugging and introspection:
-
 ```typescript
-const request = container.scope(
+const request = app.scope(
   { requestId: () => crypto.randomUUID() },
   { name: 'request-123' },
 );
 
-String(request);       // "Scope(request-123) { requestId (pending) }"
+String(request);        // "Scope(request-123) { requestId (pending) }"
 request.inspect().name; // "request-123"
 ```
 
-### Transient
-
-By default every dependency is a **singleton** (created once, cached forever). When you need a **fresh instance on every access**, wrap the factory with `transient()`:
-
-```typescript
-import { createContainer, transient } from 'inwire';
-
-const container = createContainer({
-  logger: () => new LoggerService(),                  // singleton (default)
-  requestId: transient(() => crypto.randomUUID()),   // new value every time
-});
-
-container.logger === container.logger;       // true  — same instance
-container.requestId === container.requestId; // false — different every time
-```
-
 ### Lifecycle (onInit / onDestroy / dispose)
-
-Implement `onInit()` for post-creation setup and `onDestroy()` for cleanup:
 
 ```typescript
 import type { OnInit, OnDestroy } from 'inwire';
@@ -188,104 +178,108 @@ class Database implements OnInit, OnDestroy {
   async onDestroy() { await this.disconnect(); }
 }
 
-const container = createContainer({
-  db: () => new Database(),
-});
+const app = container()
+  .add('db', () => new Database())
+  .build();
 
-container.db;           // resolves + calls onInit()
-await container.dispose(); // calls onDestroy() on all resolved instances (LIFO order)
+app.db;               // resolves + calls onInit()
+await app.dispose();  // calls onDestroy() on all resolved instances (LIFO order)
 ```
-
-**Async `onInit()` is fire-and-forget during property access.** Because container property access is synchronous, any async `onInit()` runs without being awaited — errors won't surface and the service may not be ready. Use `preload()` to await async initialization. See [⚠️ Important: Async Lifecycle](#️-important-async-lifecycle) above.
 
 ### Extend
 
-Add dependencies to an existing container without mutating it. Existing singletons are shared:
+Add dependencies to an existing container without mutating it:
 
 ```typescript
-const base = createContainer({
-  logger: () => new LoggerService(),
-});
+const base = container()
+  .add('logger', () => new LoggerService())
+  .build();
 
 const extended = base.extend({
-  db: (c) => new Database(c.logger),
+  db: (c) => new Database(c.logger),  // c typed as typeof base
 });
 
 extended.logger; // shared singleton from base
 extended.db;     // new dependency
 ```
 
-> **scope vs extend:** `scope()` creates a parent-child chain — the child delegates unresolved keys to the parent. `extend()` creates a flat container with a merged factory map and shared cache. Use `scope()` for per-request isolation, `extend()` for additive composition.
+> **scope vs extend:** `scope()` creates a parent-child chain. `extend()` creates a flat container with merged factories and shared cache. Use `scope()` for per-request isolation, `extend()` for additive composition.
+
+### Modules
+
+A module is a function `(builder) => builder` that chains `.add()` calls. `c` is fully typed in every factory.
+
+#### Pre-build: `addModule()` on the builder
+
+```typescript
+import { container, ContainerBuilder } from 'inwire';
+
+function dbModule<T extends { config: { dbUrl: string }; logger: Logger }>(
+  b: ContainerBuilder<Record<string, any>, T>,
+) {
+  return b
+    .add('db', (c) => new Database(c.config.dbUrl))
+    .add('cache', (c) => new Redis(c.config.dbUrl));
+}
+
+const app = container()
+  .add('config', { dbUrl: 'postgres://...', port: 3000 })
+  .add('logger', () => new Logger())
+  .addModule(dbModule)
+  .build();
+```
+
+#### Post-build: `module()` on the container
+
+Compose modules after `.build()` — same DX, applied to an existing container:
+
+```typescript
+const core = container()
+  .add('config', { dbUrl: 'postgres://...' })
+  .add('logger', () => new Logger())
+  .build();
+
+const withDb = core.module((b) => b
+  .add('db', (c) => new Database(c.config.dbUrl))
+  .add('cache', (c) => new Redis(c.config.dbUrl))
+);
+
+// Chainable
+const full = withDb.module((b) => b
+  .add('userService', (c) => new UserService(c.db, c.logger))
+);
+```
+
+`module()` uses the builder internally for typed `c`, then delegates to `extend()`. Works on `scope()` and `extend()` results too.
 
 ### Preload
 
-Eagerly resolve specific dependencies at startup (warm-up):
-
 ```typescript
-const container = createContainer({
-  db: () => new Database(),
-  cache: () => new Redis(),
-  logger: () => new LoggerService(),
-});
-
-await container.preload('db', 'cache');
-// db and cache are now resolved, logger is still lazy
-
-await container.preload();
-// resolve ALL dependencies at once
+await app.preload('db', 'cache'); // resolve specific deps
+await app.preload();              // resolve ALL
 ```
-
-**This is how you safely initialize async services.** See [⚠️ Important: Async Lifecycle](#️-important-async-lifecycle) above.
 
 ### Reset
 
-Invalidate cached singletons to force re-creation on next access:
-
 ```typescript
-const container = createContainer({
-  db: () => new Database(),
-  cache: () => new Redis(),
-});
-
-container.db;  // creates Database
-container.reset('db');
-container.db;  // creates a NEW Database instance
-
-// Other singletons are untouched
-// Reset in a scope does not affect the parent
+app.db;           // creates Database
+app.reset('db');
+app.db;           // creates a NEW Database instance
 ```
 
 ### Introspection
 
-Built-in tools for debugging and AI analysis:
-
 ```typescript
-// Full dependency graph
-container.inspect();
-// { providers: { db: { key: 'db', resolved: true, deps: [], scope: 'singleton' }, ... } }
-
-// Single provider details
-container.describe('userService');
-// { key: 'userService', resolved: true, deps: ['userRepo', 'logger'], scope: 'singleton' }
-
-// Health check
-container.health();
-// { totalProviders: 4, resolved: ['db', 'logger'], unresolved: ['cache'], warnings: [] }
-
-// Human-readable string
-String(container);
-// "Container { db -> [] (resolved), logger (pending) }"
+app.inspect();     // full dependency graph (JSON)
+app.describe('db'); // single provider info
+app.health();      // health status + warnings
+String(app);       // human-readable
 ```
 
-Feed the graph to an LLM or diagnostic tool:
+Feed the graph to an LLM:
 
 ```typescript
-const graph = JSON.stringify(container.inspect(), null, 2);
-
-const response = await anthropic.messages.create({
-  model: 'claude-sonnet-4-5-20250929',
-  messages: [{ role: 'user', content: `Analyze this dependency graph for issues:\n${graph}` }],
-});
+const graph = JSON.stringify(app.inspect(), null, 2);
 ```
 
 ### Smart Errors
@@ -293,71 +287,26 @@ const response = await anthropic.messages.create({
 7 error types, each with `hint`, `details`, and actionable suggestions:
 
 ```typescript
-// Non-function value
-createContainer({ apiKey: 'sk-123' });
-// ContainerConfigError: 'apiKey' must be a factory function, got string.
-// hint: "Wrap it: apiKey: () => 'sk-123'"
-
 // Reserved key
-createContainer({ inspect: () => 'foo' });
+container().add('inspect', () => 'foo');
 // ReservedKeyError: 'inspect' is a reserved container method.
-// hint: "Rename this dependency, e.g. 'inspectService' or 'myInspect'."
 
 // Missing dependency with fuzzy suggestion
-container.userServce; // typo
-// ProviderNotFoundError: Cannot resolve 'userServce': dependency 'userServce' not found.
-// hint: "Did you mean 'userService'?"
+app.userServce; // typo
+// ProviderNotFoundError: Did you mean 'userService'?
 
 // Circular dependency
-// CircularDependencyError: Circular dependency detected while resolving 'authService'.
-// Cycle: authService -> userService -> authService
-
-// Undefined return
-// UndefinedReturnError: Factory 'db' returned undefined.
-// hint: "Did you forget a return statement?"
-
-// Factory runtime error
-// FactoryError: Factory 'db' threw an error: "Connection refused"
+// CircularDependencyError: Cycle: authService -> userService -> authService
 ```
 
 ### Scope Mismatch Detection
 
-Warns when a singleton depends on a transient (the transient value gets frozen inside the singleton):
-
 ```typescript
-const container = createContainer({
-  requestId: transient(() => crypto.randomUUID()),
-  userService: (c) => new UserService(c.requestId), // singleton depends on transient!
-});
-
-container.health().warnings;
+app.health().warnings;
 // [{ type: 'scope_mismatch', message: "Singleton 'userService' depends on transient 'requestId'." }]
 ```
 
-### Fuzzy Key Suggestion
-
-When a key is not found, Levenshtein-based matching suggests the closest registered key (>= 50% similarity):
-
-```typescript
-container.userServce;
-// ProviderNotFoundError: Did you mean 'userService'?
-```
-
 ### Duplicate Key Detection
-
-When spreading modules, JavaScript silently overwrites duplicate keys (last one wins). inwire detects this internally and surfaces collisions via `health().warnings`:
-
-```typescript
-const container = createContainer({
-  ...authModule,   // has 'logger'
-  ...userModule,   // also has 'logger' — last one wins silently
-});
-
-container.health().warnings;
-// [{ type: 'duplicate_key', message: "Key 'logger' appears in multiple modules", ... }]
-```
-
-For pre-spread validation, `detectDuplicateKeys()` is also available:
 
 ```typescript
 import { detectDuplicateKeys } from 'inwire';
@@ -368,13 +317,12 @@ detectDuplicateKeys(authModule, userModule);
 
 ## Examples
 
-Runnable examples in the [`examples/`](examples/) directory:
-
 | Example | Run | Showcases |
 |---|---|---|
-| [01-web-service.ts](examples/01-web-service.ts) | `npm run example:web` | Lifecycle (`onInit`/`onDestroy`), scope, introspection, fuzzy error, dispose |
-| [02-modular-testing.ts](examples/02-modular-testing.ts) | `npm run example:test` | Modules via spread, test overrides, reset, extend + transient, runtime safety net |
-| [03-plugin-system.ts](examples/03-plugin-system.ts) | `npm run example:plugin` | Extend chain, scoped jobs, health, JSON graph for LLM, graceful shutdown |
+| [01-web-service.ts](examples/01-web-service.ts) | `npm run example:web` | Contract mode, lifecycle, dependency inversion, scope, introspection |
+| [02-modular-testing.ts](examples/02-modular-testing.ts) | `npm run example:test` | Free mode, instance values, test overrides, extend + transient |
+| [03-plugin-system.ts](examples/03-plugin-system.ts) | `npm run example:plugin` | Extend chain, scoped jobs, health, JSON graph for LLM |
+| [04-modules.ts](examples/04-modules.ts) | `npm run example:modules` | addModule, module() post-build, typed reusable modules |
 
 ## Comparison
 
@@ -382,7 +330,8 @@ Runnable examples in the [`examples/`](examples/) directory:
 |---|---|---|---|---|---|
 | Decorators required | No | No | Yes | Yes | Yes |
 | Tokens/symbols | No | No | Yes | Yes | Yes |
-| Full TS inference | Yes | No (manual Cradle) | Partial | Partial | Partial |
+| Full TS inference | Yes (builder) | No (manual Cradle) | Partial | Partial | Partial |
+| Typed `c` in factories | Yes | No | N/A | N/A | N/A |
 | Lazy singletons | Default | Default | Manual | Manual | Manual |
 | Scoped containers | `.scope()` | `.createScope()` | `.createChildContainer()` | `.createChild()` | Module scope |
 | Lifecycle hooks | `onInit`/`onDestroy` | `dispose()` | `beforeResolution`/`afterResolution` | No | `onModuleInit`/`onModuleDestroy` |
@@ -402,11 +351,11 @@ src/
     lifecycle.ts                 # OnInit / OnDestroy interfaces
     validation.ts                # Validator, detectDuplicateKeys, Levenshtein
   infrastructure/
-    proxy-handler.ts             # Resolver (Proxy handler, cache, cycle detection)
+    resolver.ts                  # Resolver (Proxy handler, cache, cycle detection)
     transient.ts                 # transient() marker
   application/
-    create-container.ts          # createContainer, buildContainerProxy
-    scope.ts                     # createScope (child containers)
+    container-builder.ts         # ContainerBuilder class + container() function
+    container-proxy.ts           # buildContainerProxy + scope/extend inline
     introspection.ts             # inspect, describe, health, toString
 ```
 
@@ -417,19 +366,7 @@ This package ships with [llms.txt](https://llmstxt.org/) files for AI-assisted d
 - **`llms.txt`** — Concise index following the llms.txt standard
 - **`llms-full.txt`** — Complete API reference optimized for LLM context windows
 
-Use them to feed inwire documentation to any LLM or AI coding tool:
-
-```bash
-cat node_modules/inwire/llms-full.txt
-```
-
 Compatible with [Context7](https://context7.com/) and any tool that supports the llms.txt standard.
-
-At runtime, `.inspect()` returns the full dependency graph as serializable JSON — pipe it directly into an LLM for architecture analysis:
-
-```typescript
-const graph = JSON.stringify(container.inspect(), null, 2);
-```
 
 ## API Reference
 
@@ -437,38 +374,46 @@ const graph = JSON.stringify(container.inspect(), null, 2);
 
 | Export | Description |
 |---|---|
-| `createContainer(defs)` | Creates a DI container from factory functions |
-| `transient(factory)` | Marks a factory as transient (new instance per access) |
-| `detectDuplicateKeys(...modules)` | Pre-spread validation — detects duplicate keys across module objects |
+| `container<T?>()` | Creates a new `ContainerBuilder`. Pass interface `T` for contract mode. |
+| `transient(factory)` | Marks a factory as transient (for scope/extend) |
+| `detectDuplicateKeys(...modules)` | Pre-spread validation — detects duplicate keys |
+
+### ContainerBuilder Methods
+
+| Method | Description |
+|---|---|
+| `.add(key, factory)` | Register a dependency (factory or instance) |
+| `.addTransient(key, factory)` | Register a transient dependency |
+| `.addModule(module)` | Apply a module `(builder) => builder` |
+| `.build()` | Build and return the container |
 
 ### Container Methods
 
 | Method | Description |
 |---|---|
-| `container.scope(extra, options?)` | Creates a child container with additional deps. Pass `{ name }` for debugging |
-| `container.extend(extra)` | Returns a new container with additional deps (shared cache) |
-| `container.preload(...keys)` | Eagerly resolves specific dependencies, or all if no keys given |
-| `container.reset(...keys)` | Invalidates cached singletons, forcing re-creation on next access |
-| `container.inspect()` | Returns the full dependency graph |
-| `container.describe(key)` | Returns info about a single provider |
-| `container.health()` | Returns health status and warnings |
-| `container.dispose()` | Calls `onDestroy()` on all resolved instances |
+| `.scope(extra, options?)` | Creates a child container with additional deps |
+| `.extend(extra)` | Returns a new container with additional deps (shared cache) |
+| `.module(fn)` | Applies a module post-build using the builder for typed `c` |
+| `.preload(...keys)` | Eagerly resolves dependencies |
+| `.reset(...keys)` | Invalidates cached singletons |
+| `.inspect()` | Returns the full dependency graph |
+| `.describe(key)` | Returns info about a single provider |
+| `.health()` | Returns health status and warnings |
+| `.dispose()` | Calls `onDestroy()` on all resolved instances |
 
 ### Types
 
 | Export | Description |
 |---|---|
 | `Container<T>` | Full container type (resolved deps + methods) |
-| `DepsDefinition` | `Record<string, Factory>` |
-| `Factory<T>` | `(container) => T` |
-| `ResolvedDeps<T>` | Extracts return types from a `DepsDefinition` |
+| `ContainerBuilder<TContract, TBuilt>` | Fluent builder class (also used in `module()` callbacks) |
+| `IContainer<T>` | Container methods interface |
 | `OnInit` | Interface with `onInit(): void \| Promise<void>` |
 | `OnDestroy` | Interface with `onDestroy(): void \| Promise<void>` |
 | `ContainerGraph` | Return type of `inspect()` |
 | `ContainerHealth` | Return type of `health()` |
-| `ContainerWarning` | Warning object (`scope_mismatch` \| `duplicate_key`) |
+| `ContainerWarning` | Warning object (`scope_mismatch`) |
 | `ProviderInfo` | Return type of `describe()` |
-| `IContainer<T>` | Container methods interface |
 | `ScopeOptions` | Options for `scope()` (`{ name?: string }`) |
 
 ### Errors

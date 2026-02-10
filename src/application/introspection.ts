@@ -4,7 +4,7 @@ import type {
   ContainerWarning,
   ProviderInfo,
 } from '../domain/types.js';
-import type { Resolver } from '../infrastructure/proxy-handler.js';
+import type { Resolver } from '../infrastructure/resolver.js';
 import { isTransient } from '../infrastructure/transient.js';
 
 /**

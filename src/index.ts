@@ -4,23 +4,21 @@
  *
  * @example
  * ```typescript
- * import { createContainer, transient } from 'inwire';
+ * import { container, transient } from 'inwire';
  *
- * const container = createContainer({
- *   logger: () => new LoggerService(),
- *   db: () => new Database(process.env.DB_URL!),
- *   userRepo: (c): UserRepository => new PgUserRepo(c.db),
- *   userService: (c) => new UserService(c.userRepo, c.logger),
- * });
+ * const app = container()
+ *   .add('logger', () => new LoggerService())
+ *   .add('db', (c) => new Database(c.logger))
+ *   .build();
  *
- * container.userService; // lazy, singleton, fully typed
+ * app.db; // lazy, singleton, fully typed
  * ```
  *
  * @packageDocumentation
  */
 
 // Core API
-export { createContainer } from './application/create-container.js';
+export { container, ContainerBuilder } from './application/container-builder.js';
 export { transient } from './infrastructure/transient.js';
 
 // Types
@@ -29,11 +27,8 @@ export type {
   ContainerGraph,
   ContainerHealth,
   ContainerWarning,
-  DepsDefinition,
-  Factory,
   IContainer,
   ProviderInfo,
-  ResolvedDeps,
   ScopeOptions,
 } from './domain/types.js';
 

@@ -1,9 +1,9 @@
 /**
  * Example 03 — Plugin System
  *
- * Showcases: extend, health, scoped jobs, JSON graph for LLM, graceful shutdown.
+ * Showcases: extend chain, health, scoped jobs, JSON graph for LLM, graceful shutdown.
  */
-import { createContainer, transient } from '../src/index.js';
+import { container, transient } from '../src/index.js';
 
 // ── Core services ───────────────────────────────────────────────────────────
 
@@ -51,13 +51,13 @@ class JobStore {
   }
 }
 
-// ── Core container ──────────────────────────────────────────────────────────
+// ── Core container (builder) ────────────────────────────────────────────────
 
-const core = createContainer({
-  logger: () => new Logger(),
-  metrics: () => new Metrics(),
-  jobStore: () => new JobStore(),
-});
+const core = container()
+  .add('logger', () => new Logger())
+  .add('metrics', () => new Metrics())
+  .add('jobStore', () => new JobStore())
+  .build();
 
 // ── Plugins — extend the core ───────────────────────────────────────────────
 
@@ -130,6 +130,9 @@ async function main() {
   console.log(`resolved: [${health.resolved.join(', ')}]`);
   console.log(`unresolved: [${health.unresolved.join(', ')}]`);
   console.log(`warnings: ${health.warnings.length}`);
+
+  console.log('\n=== Container ===');
+  console.log(String(app));
 
   console.log('\n=== Inspect (for LLM) ===');
   const graph = app.inspect();

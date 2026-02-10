@@ -1,3 +1,5 @@
+import type { ContainerBuilder } from '../application/container-builder.js';
+
 /**
  * A factory function that receives the container and returns an instance.
  *
@@ -43,6 +45,7 @@ export type ResolvedDeps<T extends DepsDefinition> = {
 export const RESERVED_KEYS = [
   'scope',
   'extend',
+  'module',
   'preload',
   'reset',
   'inspect',
@@ -68,11 +71,11 @@ export interface ScopeOptions {
  *
  * @example
  * ```typescript
- * const container: Container<{ logger: LoggerService }> = createContainer({
- *   logger: () => new LoggerService(),
- * });
- * container.logger; // LoggerService
- * container.inspect(); // ContainerGraph
+ * const c = container()
+ *   .add('logger', () => new LoggerService())
+ *   .build();
+ * c.logger; // LoggerService
+ * c.inspect(); // ContainerGraph
  * ```
  */
 export type Container<T extends Record<string, unknown> = Record<string, unknown>> =
@@ -90,13 +93,14 @@ export interface IContainer<T extends Record<string, unknown> = Record<string, u
    * ```typescript
    * const request = app.scope({
    *   requestId: () => crypto.randomUUID(),
-   *   currentUser: () => extractUser(req),
+   *   handler: (c) => new Handler(c.logger),  // c typed as parent
    * });
-   * request.requestId; // scoped singleton
-   * request.logger;    // inherited from parent
    * ```
    */
-  scope<E extends DepsDefinition>(extra: E, options?: ScopeOptions): Container<Omit<T, keyof ResolvedDeps<E>> & ResolvedDeps<E>>;
+  scope<E extends Record<string, (c: T) => any>>(
+    extra: E,
+    options?: ScopeOptions,
+  ): Container<Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }>;
 
   /**
    * Returns a new container with additional dependencies.
@@ -104,10 +108,31 @@ export interface IContainer<T extends Record<string, unknown> = Record<string, u
    *
    * @example
    * ```typescript
-   * const appWithAuth = app.extend(authDeps);
+   * const full = app.extend({
+   *   cache: (c) => new Redis(c.logger),  // c typed as parent
+   * });
    * ```
    */
-  extend<E extends DepsDefinition>(extra: E): Container<Omit<T, keyof ResolvedDeps<E>> & ResolvedDeps<E>>;
+  extend<E extends Record<string, (c: T) => any>>(
+    extra: E,
+  ): Container<Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }>;
+
+  /**
+   * Applies a module post-build using the builder pattern.
+   * Semantically equivalent to `extend()` but uses `ContainerBuilder` for
+   * incremental type accumulation of `c` in factories.
+   *
+   * @example
+   * ```typescript
+   * const withDb = app.module((b) => b
+   *   .add('db', (c) => new Database(c.config))
+   *   .add('cache', (c) => new Redis(c.config))
+   * );
+   * ```
+   */
+  module<TNew extends Record<string, any>>(
+    fn: (builder: ContainerBuilder<Record<string, any>, T>) => ContainerBuilder<Record<string, any>, TNew>,
+  ): Container<TNew>;
 
   /**
    * Pre-resolves dependencies (warm-up).
@@ -142,7 +167,7 @@ export interface IContainer<T extends Record<string, unknown> = Record<string, u
    * // { key: 'userService', resolved: true, deps: ['userRepo', 'logger'], scope: 'singleton' }
    * ```
    */
-  describe(key: keyof T): ProviderInfo;
+  describe(key: keyof T | string): ProviderInfo;
 
   /**
    * Returns container health status and warnings.

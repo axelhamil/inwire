@@ -24,6 +24,7 @@
     "example:web": "tsx examples/01-web-service.ts",
     "example:test": "tsx examples/02-modular-testing.ts",
     "example:plugin": "tsx examples/03-plugin-system.ts",
+    "example:modules": "tsx examples/04-modules.ts",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

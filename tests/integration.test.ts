@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer, transient, detectDuplicateKeys } from '../src/index.js';
-import type { DepsDefinition } from '../src/index.js';
+import { container, transient, detectDuplicateKeys } from '../src/index.js';
 
 // === Domain interfaces ===
 interface UserRepository {
@@ -45,38 +44,29 @@ class SimpleAuthService implements AuthService {
   }
 }
 
-// === Modules ===
-const userDeps = {
-  userRepo: (): UserRepository => new InMemoryUserRepo(),
-  userService: (c: any) => ({
-    getUser(id: string) {
-      c.logger.log(`Getting user ${id}`);
-      return c.userRepo.findById(id);
-    },
-  }),
-} satisfies DepsDefinition;
-
-const authDeps = {
-  authService: (c: any): AuthService => new SimpleAuthService(c.logger),
-} satisfies DepsDefinition;
-
 describe('integration: DDD scenario', () => {
-  it('composes modules with spread', () => {
-    const container = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      ...userDeps,
-      ...authDeps,
-    });
+  it('composes modules via builder', () => {
+    const c = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .add('userRepo', (): UserRepository => new InMemoryUserRepo())
+      .add('userService', (c) => ({
+        getUser(id: string) {
+          c.logger.log(`Getting user ${id}`);
+          return c.userRepo.findById(id);
+        },
+      }))
+      .add('authService', (c): AuthService => new SimpleAuthService(c.logger))
+      .build();
 
-    const user = container.userService.getUser('1');
+    const user = c.userService.getUser('1');
     expect(user).toEqual({ id: '1', name: 'Alice' });
 
-    const auth = container.authService.authenticate('token-123');
+    const auth = c.authService.authenticate('token-123');
     expect(auth).toEqual({ userId: '1' });
 
     // Logger was shared
-    expect(container.logger.messages).toContain('Getting user 1');
-    expect(container.logger.messages).toContain('Auth: token-123');
+    expect(c.logger.messages).toContain('Getting user 1');
+    expect(c.logger.messages).toContain('Auth: token-123');
   });
 
   it('overrides for testing', () => {
@@ -84,14 +74,19 @@ describe('integration: DDD scenario', () => {
       findById() { return { id: 'test', name: 'Test User' }; }
     }
 
-    const testContainer = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      ...userDeps,
-      ...authDeps,
-      userRepo: (): UserRepository => new StubUserRepo(),
-    });
+    const c = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .add('userRepo', (): UserRepository => new StubUserRepo())
+      .add('userService', (c) => ({
+        getUser(id: string) {
+          c.logger.log(`Getting user ${id}`);
+          return c.userRepo.findById(id);
+        },
+      }))
+      .add('authService', (c): AuthService => new SimpleAuthService(c.logger))
+      .build();
 
-    const user = testContainer.userService.getUser('any');
+    const user = c.userService.getUser('any');
     expect(user).toEqual({ id: 'test', name: 'Test User' });
   });
 
@@ -104,10 +99,16 @@ describe('integration: DDD scenario', () => {
   });
 
   it('scope for request-level isolation', () => {
-    const app = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      ...userDeps,
-    });
+    const app = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .add('userRepo', (): UserRepository => new InMemoryUserRepo())
+      .add('userService', (c) => ({
+        getUser(id: string) {
+          c.logger.log(`Getting user ${id}`);
+          return c.userRepo.findById(id);
+        },
+      }))
+      .build();
 
     const request1 = app.scope({
       requestId: () => 'req-001',
@@ -127,16 +128,18 @@ describe('integration: DDD scenario', () => {
   });
 
   it('extend to add modules lazily', () => {
-    const base = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      ...userDeps,
-    });
+    const base = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .add('userRepo', (): UserRepository => new InMemoryUserRepo())
+      .build();
 
     // Resolve something first
     base.logger;
 
     // Extend with auth
-    const full = base.extend(authDeps);
+    const full = base.extend({
+      authService: (c): AuthService => new SimpleAuthService(c.logger),
+    });
 
     const auth = full.authService.authenticate('late-token');
     expect(auth).toEqual({ userId: '1' });
@@ -144,17 +147,23 @@ describe('integration: DDD scenario', () => {
   });
 
   it('full introspection after resolution', () => {
-    const container = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      ...userDeps,
-      ...authDeps,
-    });
+    const c = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .add('userRepo', (): UserRepository => new InMemoryUserRepo())
+      .add('userService', (c) => ({
+        getUser(id: string) {
+          c.logger.log(`Getting user ${id}`);
+          return c.userRepo.findById(id);
+        },
+      }))
+      .add('authService', (c): AuthService => new SimpleAuthService(c.logger))
+      .build();
 
     // Resolve everything
-    container.userService.getUser('1');
-    container.authService;
+    c.userService.getUser('1');
+    c.authService;
 
-    const graph = container.inspect();
+    const graph = c.inspect();
     expect(Object.keys(graph.providers)).toContain('logger');
     expect(Object.keys(graph.providers)).toContain('userRepo');
     expect(Object.keys(graph.providers)).toContain('userService');
@@ -163,20 +172,20 @@ describe('integration: DDD scenario', () => {
     expect(graph.providers.userService.deps).toContain('logger');
     expect(graph.providers.userService.deps).toContain('userRepo');
 
-    const health = container.health();
+    const health = c.health();
     expect(health.totalProviders).toBe(4);
     expect(health.resolved.length).toBe(4);
     expect(health.unresolved).toEqual([]);
   });
 
   it('transient in real scenario', () => {
-    const container = createContainer({
-      logger: (): Logger => new ConsoleLogger(),
-      correlationId: transient(() => `cid-${Math.random().toString(36).slice(2)}`),
-    });
+    const c = container()
+      .add('logger', (): Logger => new ConsoleLogger())
+      .addTransient('correlationId', () => `cid-${Math.random().toString(36).slice(2)}`)
+      .build();
 
-    const id1 = container.correlationId;
-    const id2 = container.correlationId;
+    const id1 = c.correlationId;
+    const id2 = c.correlationId;
 
     expect(id1).not.toBe(id2);
     expect(id1).toMatch(/^cid-/);
@@ -185,31 +194,31 @@ describe('integration: DDD scenario', () => {
   it('full lifecycle: init, use, dispose', async () => {
     const events: string[] = [];
 
-    const container = createContainer({
-      db: () => ({
+    const c = container()
+      .add('db', () => ({
         query: (q: string) => `result:${q}`,
         onInit() { events.push('db:init'); },
         onDestroy() { events.push('db:destroy'); },
-      }),
-      cache: () => ({
+      }))
+      .add('cache', () => ({
         get: (k: string) => k,
         onInit() { events.push('cache:init'); },
         onDestroy() { events.push('cache:destroy'); },
-      }),
-    });
+      }))
+      .build();
 
     // Lazy init
     expect(events).toEqual([]);
 
     // First access triggers onInit
-    container.db.query('SELECT 1');
+    c.db.query('SELECT 1');
     expect(events).toEqual(['db:init']);
 
-    container.cache.get('key');
+    c.cache.get('key');
     expect(events).toEqual(['db:init', 'cache:init']);
 
     // Dispose
-    await container.dispose();
+    await c.dispose();
     expect(events).toEqual(['db:init', 'cache:init', 'cache:destroy', 'db:destroy']);
   });
 });

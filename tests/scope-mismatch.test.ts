@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer, transient } from '../src/index.js';
+import { container, transient } from '../src/index.js';
 
 describe('scope mismatch detection', () => {
   it('warns when singleton depends on transient', () => {
-    const container = createContainer({
-      requestId: transient(() => Math.random()),
-      service: (c) => ({ id: c.requestId }),
-    });
+    const c = container()
+      .addTransient('requestId', () => Math.random())
+      .add('service', (c: any) => ({ id: c.requestId }))
+      .build();
 
     // Resolve the singleton that depends on transient
-    container.service;
+    c.service;
 
-    const health = container.health();
+    const health = c.health();
     expect(health.warnings.length).toBeGreaterThan(0);
     expect(health.warnings[0].type).toBe('scope_mismatch');
     expect(health.warnings[0].details).toEqual({
@@ -21,14 +21,14 @@ describe('scope mismatch detection', () => {
   });
 
   it('warning has descriptive message property', () => {
-    const container = createContainer({
-      requestId: transient(() => Math.random()),
-      service: (c) => ({ id: c.requestId }),
-    });
+    const c = container()
+      .addTransient('requestId', () => Math.random())
+      .add('service', (c: any) => ({ id: c.requestId }))
+      .build();
 
-    container.service;
+    c.service;
 
-    const warning = container.health().warnings[0];
+    const warning = c.health().warnings[0];
     expect(warning.message).toContain('service');
     expect(warning.message).toContain('requestId');
     expect(warning.message).toContain('Singleton');
@@ -36,54 +36,54 @@ describe('scope mismatch detection', () => {
   });
 
   it('multiple transient deps produce multiple warnings', () => {
-    const container = createContainer({
-      reqId: transient(() => Math.random()),
-      timestamp: transient(() => Date.now()),
-      service: (c) => ({ id: c.reqId, ts: c.timestamp }),
-    });
+    const c = container()
+      .addTransient('reqId', () => Math.random())
+      .addTransient('timestamp', () => Date.now())
+      .add('service', (c: any) => ({ id: c.reqId, ts: c.timestamp }))
+      .build();
 
-    container.service;
+    c.service;
 
-    const warnings = container.health().warnings;
+    const warnings = c.health().warnings;
     expect(warnings.length).toBe(2);
     expect(warnings.map((w) => w.details.transient)).toContain('reqId');
     expect(warnings.map((w) => w.details.transient)).toContain('timestamp');
   });
 
   it('no warning when singleton depends on singleton', () => {
-    const container = createContainer({
-      config: () => ({ port: 3000 }),
-      service: (c) => ({ port: c.config.port }),
-    });
+    const c = container()
+      .add('config', () => ({ port: 3000 }))
+      .add('service', (c) => ({ port: c.config.port }))
+      .build();
 
-    container.service;
+    c.service;
 
-    const health = container.health();
+    const health = c.health();
     expect(health.warnings).toEqual([]);
   });
 
   it('no warning when transient depends on transient', () => {
-    const container = createContainer({
-      a: transient(() => Math.random()),
-      b: transient((c) => c.a * 2),
-    });
+    const c = container()
+      .addTransient('a', () => Math.random())
+      .addTransient('b', (c: any) => c.a * 2)
+      .build();
 
-    container.b;
-    container.b;
+    c.b;
+    c.b;
 
-    const health = container.health();
+    const health = c.health();
     expect(health.warnings).toEqual([]);
   });
 
   it('no warning when transient depends on singleton', () => {
-    const container = createContainer({
-      config: () => ({ base: 'http://api.com' }),
-      url: transient((c) => `${c.config.base}/${Math.random()}`),
-    });
+    const c = container()
+      .add('config', () => ({ base: 'http://api.com' }))
+      .addTransient('url', (c) => `${c.config.base}/${Math.random()}`)
+      .build();
 
-    container.url;
+    c.url;
 
-    const health = container.health();
+    const health = c.health();
     expect(health.warnings).toEqual([]);
   });
 });

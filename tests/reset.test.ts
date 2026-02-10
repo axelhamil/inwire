@@ -1,23 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { createContainer } from '../src/index.js';
+import { container } from '../src/index.js';
 
 describe('reset', () => {
   it('reset forces re-creation on next access', () => {
     let callCount = 0;
 
-    const container = createContainer({
-      db: () => {
+    const c = container()
+      .add('db', () => {
         callCount++;
         return { id: callCount };
-      },
-    });
+      })
+      .build();
 
-    expect(container.db.id).toBe(1);
-    expect(container.db.id).toBe(1); // cached
+    expect(c.db.id).toBe(1);
+    expect(c.db.id).toBe(1); // cached
 
-    container.reset('db');
+    c.reset('db');
 
-    expect(container.db.id).toBe(2); // new instance
+    expect(c.db.id).toBe(2); // new instance
     expect(callCount).toBe(2);
   });
 
@@ -25,54 +25,54 @@ describe('reset', () => {
     let dbCount = 0;
     let cacheCount = 0;
 
-    const container = createContainer({
-      db: () => ({ id: ++dbCount }),
-      cache: () => ({ id: ++cacheCount }),
-    });
+    const c = container()
+      .add('db', () => ({ id: ++dbCount }))
+      .add('cache', () => ({ id: ++cacheCount }))
+      .build();
 
-    container.db;
-    container.cache;
+    c.db;
+    c.cache;
 
-    container.reset('db');
+    c.reset('db');
 
-    expect(container.db.id).toBe(2); // re-created
-    expect(container.cache.id).toBe(1); // untouched
+    expect(c.db.id).toBe(2); // re-created
+    expect(c.cache.id).toBe(1); // untouched
   });
 
   it('reset on unresolved key is a silent no-op', () => {
-    const container = createContainer({
-      db: () => 'database',
-    });
+    const c = container()
+      .add('db', () => 'database')
+      .build();
 
     // Should not throw
-    container.reset('db');
+    c.reset('db');
   });
 
   it('reset + onInit: next access calls onInit again', () => {
     let initCount = 0;
 
-    const container = createContainer({
-      service: () => ({
+    const c = container()
+      .add('service', () => ({
         value: 'svc',
         onInit() { initCount++; },
-      }),
-    });
+      }))
+      .build();
 
-    container.service;
+    c.service;
     expect(initCount).toBe(1);
 
-    container.reset('service');
+    c.reset('service');
 
-    container.service;
+    c.service;
     expect(initCount).toBe(2);
   });
 
   it('reset in scope does not affect parent cache', () => {
     let parentCount = 0;
 
-    const parent = createContainer({
-      db: () => ({ id: ++parentCount }),
-    });
+    const parent = container()
+      .add('db', () => ({ id: ++parentCount }))
+      .build();
 
     // Resolve in parent
     expect(parent.db.id).toBe(1);
