@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/axelhamil/inwire/compare/v1.0.3...v1.1.0) (2026-02-10)
+
+
+### Bug Fixes
+
+* **types:** replace all any with unknown across internal and public API ([296b3f5](https://github.com/axelhamil/inwire/commit/296b3f5ef4186ddcf0e2bdc3b6ad35c2ae492343))
+
+
+### Features
+
+* add module() post-build composition + architecture refactor ([5c5a66f](https://github.com/axelhamil/inwire/commit/5c5a66f4ba2f1b448d44dfbb85f5547f6a16bbd3))
+
 ## [1.0.3](https://github.com/axelhamil/inwire/compare/v1.0.2...v1.0.3) (2026-02-10)
 
 
