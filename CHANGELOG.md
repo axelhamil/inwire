@@ -1,3 +1,17 @@
+# [2.0.0](https://github.com/axelhamil/inwire/compare/v1.2.0...v2.0.0) (2026-02-10)
+
+
+* feat!: parallel preload with topological sort + await onInit ([db931ac](https://github.com/axelhamil/inwire/commit/db931ac667c8702b9be98f4e7e65090e2f6e07a9))
+
+
+### BREAKING CHANGES
+
+* preload() now propagates onInit() errors instead
+of swallowing them — this matches the documented behavior.
+
+Also removes dead code (transientKeys, DepsDefinition, ResolvedDeps)
+and strips non-doc comments.
+
 # [1.2.0](https://github.com/axelhamil/inwire/compare/v1.1.0...v1.2.0) (2026-02-10)
 
 
