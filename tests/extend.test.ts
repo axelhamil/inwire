@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container, transient } from '../src/index.js';
+import { container } from '../src/index.js';
 
 describe('extend', () => {
   it('shares existing singleton cache with extended container', () => {

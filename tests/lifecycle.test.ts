@@ -82,13 +82,10 @@ describe('lifecycle', () => {
   });
 
   it('handles async onInit', () => {
-    let connected = false;
-
     const c = container()
       .add('db', () => ({
         async onInit() {
           await new Promise((r) => setTimeout(r, 1));
-          connected = true;
         },
       }))
       .build();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container, detectDuplicateKeys, transient } from '../src/index.js';
+import { container, detectDuplicateKeys } from '../src/index.js';
 
 // === Domain interfaces ===
 interface UserRepository {

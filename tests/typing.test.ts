@@ -6,7 +6,6 @@ import {
   FactoryError,
   ProviderNotFoundError,
   ReservedKeyError,
-  transient,
   UndefinedReturnError,
 } from '../src/index.js';
 
@@ -184,7 +183,7 @@ describe('Builder type safety', () => {
     }
 
     const c = container<AppDeps>()
-      .add('logger', () => ({ log: (msg: string) => {} }))
+      .add('logger', () => ({ log: (_msg: string) => {} }))
       .add('db', () => 'postgres')
       .build();
 

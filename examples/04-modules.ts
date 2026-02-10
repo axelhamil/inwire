@@ -6,7 +6,7 @@
  * - module() for typed module composition on the container (post-build)
  * - Reusable modules as functions, c fully typed in every factory
  */
-import { type ContainerBuilder, container, detectDuplicateKeys, transient } from '../src/index.js';
+import { type ContainerBuilder, container } from '../src/index.js';
 
 // ── Module definitions ──────────────────────────────────────────────────────
 // A module is a function (builder) => builder that chains .add() calls.
