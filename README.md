@@ -113,6 +113,8 @@ const container = createContainer({
 });
 ```
 
+> **Design trade-off**: factories defined inline in `createContainer()` get full type inference on `c`. Factories in separate module objects use `c: any` because TypeScript cannot infer the final container shape before composition. This is a deliberate choice — zero ceremony over compile-time module typing. In exchange, inwire provides a robust runtime safety net: fuzzy key suggestions, full resolution chains, structured `hint` + `details` on all 7 error types, and `health()` warnings for scope mismatches. See [examples/02-modular-testing.ts](examples/02-modular-testing.ts) for a full walkthrough.
+
 ### Test Overrides
 
 Replace any dependency with a mock at container creation:
@@ -343,14 +345,36 @@ container.userServce;
 
 ### Duplicate Key Detection
 
-Detect accidental key collisions when spreading modules:
+When spreading modules, JavaScript silently overwrites duplicate keys (last one wins). inwire detects this internally and surfaces collisions via `health().warnings`:
+
+```typescript
+const container = createContainer({
+  ...authModule,   // has 'logger'
+  ...userModule,   // also has 'logger' — last one wins silently
+});
+
+container.health().warnings;
+// [{ type: 'duplicate_key', message: "Key 'logger' appears in multiple modules", ... }]
+```
+
+For pre-spread validation, `detectDuplicateKeys()` is also available:
 
 ```typescript
 import { detectDuplicateKeys } from 'inwire';
 
-const duplicates = detectDuplicateKeys(authModule, userModule, dbModule);
-// ['logger'] — appears in more than one module
+detectDuplicateKeys(authModule, userModule);
+// ['logger']
 ```
+
+## Examples
+
+Runnable examples in the [`examples/`](examples/) directory:
+
+| Example | Run | Showcases |
+|---|---|---|
+| [01-web-service.ts](examples/01-web-service.ts) | `npm run example:web` | Lifecycle (`onInit`/`onDestroy`), scope, introspection, fuzzy error, dispose |
+| [02-modular-testing.ts](examples/02-modular-testing.ts) | `npm run example:test` | Modules via spread, test overrides, reset, extend + transient, runtime safety net |
+| [03-plugin-system.ts](examples/03-plugin-system.ts) | `npm run example:plugin` | Extend chain, scoped jobs, health, JSON graph for LLM, graceful shutdown |
 
 ## Comparison
 
@@ -415,7 +439,7 @@ const graph = JSON.stringify(container.inspect(), null, 2);
 |---|---|
 | `createContainer(defs)` | Creates a DI container from factory functions |
 | `transient(factory)` | Marks a factory as transient (new instance per access) |
-| `detectDuplicateKeys(...modules)` | Detects duplicate keys across spread modules |
+| `detectDuplicateKeys(...modules)` | Pre-spread validation — detects duplicate keys across module objects |
 
 ### Container Methods
 

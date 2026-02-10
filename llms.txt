@@ -9,7 +9,7 @@ inwire uses factory functions `(container) => instance` as the single abstractio
 
 - `createContainer(defs)` — Creates a DI container from an object of factory functions. Returns a fully-typed Proxy.
 - `transient(factory)` — Marks a factory as transient (new instance on every access, no caching).
-- `detectDuplicateKeys(...modules)` — Detects keys that appear in more than one module object.
+- `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object. Duplicate keys are also surfaced internally via `health().warnings`.
 
 ## Container Methods
 

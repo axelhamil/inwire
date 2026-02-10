@@ -21,6 +21,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
+    "example:web": "tsx examples/01-web-service.ts",
+    "example:test": "tsx examples/02-modular-testing.ts",
+    "example:plugin": "tsx examples/03-plugin-system.ts",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

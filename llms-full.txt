@@ -295,7 +295,7 @@ await container.dispose(); // calls cache.onDestroy() then db.onDestroy()
 function detectDuplicateKeys(...modules: Record<string, unknown>[]): string[]
 ```
 
-Detects duplicate keys across multiple module objects. Returns an array of keys that appear in more than one module. Use this before spreading modules into `createContainer()` to catch accidental collisions.
+Pre-spread validation utility. Detects duplicate keys across multiple module objects. Returns an array of keys that appear in more than one module. Duplicate keys are also surfaced internally via `health().warnings` as `duplicate_key` warnings.
 
 ```typescript
 import { detectDuplicateKeys } from 'inwire';
@@ -377,6 +377,8 @@ const container = createContainer({
   ...serviceModule,
 });
 ```
+
+**Design trade-off**: Factories defined inline in `createContainer()` get full type inference on `c`. Factories in separate module objects use `c: any` because TypeScript cannot infer the final container shape before composition. This is deliberate — zero ceremony over compile-time module typing, compensated by runtime diagnostics (fuzzy suggestions, resolution chains, structured errors, health warnings).
 
 Use `satisfies DepsDefinition` on module objects for type checking without losing literal types:
 
