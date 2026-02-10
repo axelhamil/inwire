@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/axelhamil/inwire/compare/v1.0.0...v1.0.1) (2026-02-10)
+
+
+### Performance Improvements
+
+* optimize build — ESM-only, minify, treeshake, exclude sourcemaps (194kB → 38kB) ([3a04835](https://github.com/axelhamil/inwire/commit/3a04835b9a3c1d52ad6bad83712e34b5fb0cc8c9))
+
 # 1.0.0 (2026-02-10)
 
 
