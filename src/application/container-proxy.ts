@@ -7,6 +7,49 @@ import { Introspection } from './introspection.js';
 const validator = new Validator();
 
 /**
+ * Groups keys into topological levels using Kahn's algorithm (BFS).
+ * Each level can be initialized in parallel; levels must run sequentially.
+ */
+function topologicalLevels(depGraph: Map<string, string[]>, keys: Set<string>): string[][] {
+  const inDegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+
+  for (const key of keys) {
+    inDegree.set(key, 0);
+  }
+
+  for (const key of keys) {
+    const deps = depGraph.get(key) ?? [];
+    for (const dep of deps) {
+      if (keys.has(dep)) {
+        inDegree.set(key, (inDegree.get(key) ?? 0) + 1);
+        const list = dependents.get(dep) ?? [];
+        list.push(key);
+        dependents.set(dep, list);
+      }
+    }
+  }
+
+  const levels: string[][] = [];
+  let queue = [...keys].filter((k) => inDegree.get(k) === 0);
+
+  while (queue.length > 0) {
+    levels.push(queue);
+    const next: string[] = [];
+    for (const key of queue) {
+      for (const dep of dependents.get(key) ?? []) {
+        const d = (inDegree.get(dep) ?? 1) - 1;
+        inDegree.set(dep, d);
+        if (d === 0) next.push(dep);
+      }
+    }
+    queue = next;
+  }
+
+  return levels;
+}
+
+/**
  * Builds the Proxy-based container from a Resolver.
  * Scope and extend are inlined here.
  * @internal
@@ -32,7 +75,13 @@ export function buildContainerProxy(
       for (const [key, factory] of Object.entries(extra)) {
         merged.set(key, factory as Factory);
       }
-      const newResolver = new Resolver(merged, new Map(resolver.getCache()));
+      const newResolver = new Resolver(
+        merged,
+        new Map(resolver.getCache()),
+        undefined,
+        undefined,
+        resolver.getInitCalled(),
+      );
       return buildContainerProxy(newResolver, builderFactory);
     },
 
@@ -45,8 +94,29 @@ export function buildContainerProxy(
 
     preload: async (...keys: string[]) => {
       const toResolve = keys.length > 0 ? keys : [...resolver.getFactories().keys()];
+
+      resolver.setDeferOnInit(true);
       for (const key of toResolve) {
         resolver.resolve(key);
+      }
+      resolver.setDeferOnInit(false);
+
+      const depGraph = resolver.getDepGraph();
+      const allKeys = new Set<string>();
+      const collectDeps = (key: string) => {
+        if (allKeys.has(key)) return;
+        allKeys.add(key);
+        for (const dep of depGraph.get(key) ?? []) {
+          collectDeps(dep);
+        }
+      };
+      for (const key of toResolve) {
+        collectDeps(key);
+      }
+
+      const levels = topologicalLevels(depGraph, allKeys);
+      for (const level of levels) {
+        await Promise.all(level.map((k) => resolver.callOnInit(k)));
       }
     },
 
@@ -55,6 +125,7 @@ export function buildContainerProxy(
       for (const key of keys) {
         cache.delete(key);
       }
+      resolver.clearInitState(...keys);
     },
 
     inspect: () => introspection.inspect(),
@@ -71,6 +142,7 @@ export function buildContainerProxy(
         }
       }
       cache.clear();
+      resolver.clearAllInitState();
     },
   };
 

@@ -269,6 +269,16 @@ await app.preload('db', 'cache'); // resolve specific deps
 await app.preload();              // resolve ALL
 ```
 
+`preload()` **awaits `onInit()`** on every resolved service and runs independent branches in parallel using topological sorting:
+
+```
+Level 0:  [config]          ← no deps, inits first
+Level 1:  [db] [cache]      ← depend on config, init in parallel
+Level 2:  [api]             ← depends on db + cache, inits last
+```
+
+Errors thrown in `onInit()` propagate to the caller — use `try/catch` around `preload()` for startup validation.
+
 ### Reset
 
 ```typescript

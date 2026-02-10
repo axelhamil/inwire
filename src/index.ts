@@ -17,9 +17,7 @@
  * @packageDocumentation
  */
 
-// Core API
 export { ContainerBuilder, container } from './application/container-builder.js';
-// Errors (classes, so exported as values)
 export {
   CircularDependencyError,
   ContainerConfigError,
@@ -30,9 +28,7 @@ export {
   ScopeMismatchWarning,
   UndefinedReturnError,
 } from './domain/errors.js';
-// Lifecycle interfaces
 export type { OnDestroy, OnInit } from './domain/lifecycle.js';
-// Types
 export type {
   Container,
   ContainerGraph,
@@ -42,6 +38,5 @@ export type {
   ProviderInfo,
   ScopeOptions,
 } from './domain/types.js';
-// Validation utilities
 export { detectDuplicateKeys } from './domain/validation.js';
 export { transient } from './infrastructure/transient.js';

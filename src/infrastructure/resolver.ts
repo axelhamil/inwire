@@ -22,6 +22,8 @@ export class Resolver {
   private readonly depGraph = new Map<string, string[]>();
   private readonly warnings: ScopeMismatchWarning[] = [];
   private readonly validator = new Validator();
+  private readonly initCalled = new Set<string>();
+  private deferOnInit = false;
 
   /** Parent resolver for scoped containers */
   private readonly parent?: Resolver;
@@ -34,11 +36,13 @@ export class Resolver {
     cache?: Map<string, unknown>,
     parent?: Resolver,
     name?: string,
+    initCalled?: Set<string>,
   ) {
     this.factories = factories;
     this.cache = cache ?? new Map();
     this.parent = parent;
     this.name = name;
+    if (initCalled) this.initCalled = new Set(initCalled);
   }
 
   getName(): string | undefined {
@@ -54,14 +58,12 @@ export class Resolver {
    * - Emits scope mismatch warnings
    */
   resolve(key: string, chain: string[] = []): unknown {
-    // Check singleton cache (non-transient only)
     const factory = this.factories.get(key);
 
     if (factory && !isTransient(factory) && this.cache.has(key)) {
       return this.cache.get(key);
     }
 
-    // Try parent if we don't have the factory
     if (!factory) {
       if (this.parent) {
         return this.parent.resolve(key, chain);
@@ -71,7 +73,6 @@ export class Resolver {
       throw new ProviderNotFoundError(key, chain, allKeys, suggestion);
     }
 
-    // Circular dependency detection
     if (this.resolving.has(key)) {
       throw new CircularDependencyError(key, [...chain]);
     }
@@ -80,7 +81,6 @@ export class Resolver {
     const currentChain = [...chain, key];
 
     try {
-      // Create a tracking proxy to record which deps this factory accesses
       const deps: string[] = [];
       const trackingProxy = this.createTrackingProxy(deps, currentChain);
 
@@ -90,10 +90,8 @@ export class Resolver {
         throw new UndefinedReturnError(key, currentChain);
       }
 
-      // Record the dependency graph
       this.depGraph.set(key, deps);
 
-      // Check scope mismatch: singleton depending on transient
       if (!isTransient(factory)) {
         for (const dep of deps) {
           const depFactory = this.getFactory(dep);
@@ -103,21 +101,15 @@ export class Resolver {
         }
       }
 
-      // Cache singleton
       if (!isTransient(factory)) {
         this.cache.set(key, instance);
       }
 
-      // Call onInit if present
-      if (hasOnInit(instance)) {
+      if (!this.deferOnInit && !this.initCalled.has(key) && hasOnInit(instance)) {
+        this.initCalled.add(key);
         const initResult = instance.onInit();
-        // If onInit returns a promise, we don't await it here (sync resolution)
-        // Users should use preload() for async init
         if (initResult instanceof Promise) {
-          initResult.catch(() => {
-            // onInit errors are swallowed during lazy resolution
-            // Use preload() to catch async init errors
-          });
+          initResult.catch(() => {});
         }
       }
 
@@ -169,6 +161,33 @@ export class Resolver {
       }
     }
     return [...keys];
+  }
+
+  setDeferOnInit(defer: boolean): void {
+    this.deferOnInit = defer;
+  }
+
+  async callOnInit(key: string): Promise<void> {
+    if (this.initCalled.has(key)) return;
+    this.initCalled.add(key);
+    const instance = this.cache.get(key);
+    if (hasOnInit(instance)) {
+      await instance.onInit();
+    }
+  }
+
+  clearInitState(...keys: string[]): void {
+    for (const key of keys) {
+      this.initCalled.delete(key);
+    }
+  }
+
+  clearAllInitState(): void {
+    this.initCalled.clear();
+  }
+
+  getInitCalled(): Set<string> {
+    return this.initCalled;
   }
 
   /**

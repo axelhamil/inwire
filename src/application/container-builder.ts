@@ -21,7 +21,6 @@ export class ContainerBuilder<
   TBuilt extends Record<string, unknown> = {},
 > {
   private readonly factories = new Map<string, Factory>();
-  private readonly transientKeys = new Set<string>();
 
   /**
    * Registers a dependency — factory (lazy) or instance (eager).
@@ -54,7 +53,6 @@ export class ContainerBuilder<
   ): ContainerBuilder<TContract, TBuilt & Record<K, V>> {
     this.validateKey(key);
     this.factories.set(key, markTransient(factory as Factory));
-    this.transientKeys.add(key);
     return this as unknown as ContainerBuilder<TContract, TBuilt & Record<K, V>>;
   }
 

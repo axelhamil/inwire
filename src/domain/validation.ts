@@ -50,11 +50,9 @@ export class Validator implements IValidator {
       }
     }
 
-    // Only suggest if the distance is reasonable relative to the longer string
     if (!bestMatch) return undefined;
     const maxLen = Math.max(key.length, bestMatch.length);
     const similarity = 1 - bestDistance / maxLen;
-    // Require at least 50% similarity
     return similarity >= 0.5 ? bestMatch : undefined;
   }
 }
@@ -91,7 +89,6 @@ function levenshtein(a: string, b: string): number {
   if (la === 0) return lb;
   if (lb === 0) return la;
 
-  // Use single-row optimization
   let prev = new Array<number>(lb + 1);
   let curr = new Array<number>(lb + 1);
 
@@ -101,11 +98,7 @@ function levenshtein(a: string, b: string): number {
     curr[0] = i;
     for (let j = 1; j <= lb; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(
-        prev[j] + 1, // deletion
-        curr[j - 1] + 1, // insertion
-        prev[j - 1] + cost, // substitution
-      );
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
     }
     [prev, curr] = [curr, prev];
   }

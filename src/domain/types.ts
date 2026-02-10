@@ -11,35 +11,6 @@ import type { ContainerBuilder } from '../application/container-builder.js';
 export type Factory<T = unknown> = (container: unknown) => T;
 
 /**
- * An object of factory functions — the definition of a container.
- * Each key maps to a factory that produces the dependency.
- *
- * @example
- * ```typescript
- * const deps: DepsDefinition = {
- *   logger: () => new LoggerService(),
- *   db: () => new Database(process.env.DB_URL!),
- *   userRepo: (c) => new PgUserRepo(c.db),
- * };
- * ```
- */
-export type DepsDefinition = Record<string, Factory>;
-
-/**
- * Extracts the resolved types from a deps definition.
- * Maps each key to the return type of its factory function.
- *
- * @example
- * ```typescript
- * type Resolved = ResolvedDeps<{ logger: () => LoggerService }>;
- * // { logger: LoggerService }
- * ```
- */
-export type ResolvedDeps<T extends DepsDefinition> = {
-  readonly [K in keyof T]: ReturnType<T[K]>;
-};
-
-/**
  * Reserved method names on the container that cannot be used as dependency keys.
  */
 export const RESERVED_KEYS = [

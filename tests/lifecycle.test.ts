@@ -183,13 +183,8 @@ describe('lifecycle', () => {
       }))
       .build();
 
-    // preload should NOT throw because onInit is fire-and-forget even in resolve()
-    // but preload does call resolve() which triggers onInit
-    // The key behavior: preload resolves eagerly
-    await c.preload('db');
-
-    // The instance is resolved and cached despite async error
-    expect(c.describe('db').resolved).toBe(true);
+    // preload now awaits onInit — async errors propagate
+    await expect(c.preload('db')).rejects.toThrow('connection refused');
   });
 
   it('dispose clears cache — re-access calls factory again', async () => {
