@@ -1,6 +1,6 @@
 {
   "name": "inwire",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens. Built-in introspection for AI tooling.",
   "type": "module",
   "main": "./dist/index.mjs",
