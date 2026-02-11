@@ -1,6 +1,6 @@
 # inwire
 
-Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens. Built-in introspection for AI tooling and debugging.
+Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens. Built-in introspection for AI tooling and debugging. Zero dependencies.
 
 [![NPM Version](https://img.shields.io/npm/v/inwire)](https://www.npmjs.com/package/inwire)
 [![CI](https://img.shields.io/github/actions/workflow/status/axelhamil/inwire/ci.yml)](https://github.com/axelhamil/inwire/actions)
