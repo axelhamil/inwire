@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/axelhamil/inwire/compare/v2.0.0...v2.1.0) (2026-02-11)
+
+
+### Features
+
+* harden error handling, lifecycle resilience + 62 new tests ([d5365d7](https://github.com/axelhamil/inwire/commit/d5365d7c3db47f7890641345514ad2964e5bb81d))
+
 # [2.0.0](https://github.com/axelhamil/inwire/compare/v1.2.0...v2.0.0) (2026-02-10)
 
 
