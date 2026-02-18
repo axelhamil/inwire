@@ -49,13 +49,14 @@ export interface ScopeOptions {
  * c.inspect(); // ContainerGraph
  * ```
  */
-export type Container<T extends Record<string, unknown> = Record<string, unknown>> = T &
-  IContainer<T>;
+// biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+export type Container<T extends Record<string, any> = Record<string, unknown>> = T & IContainer<T>;
 
 /**
  * Container methods interface. Defines the API available on every container.
  */
-export interface IContainer<T extends Record<string, unknown> = Record<string, unknown>> {
+// biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+export interface IContainer<T extends Record<string, any> = Record<string, unknown>> {
   /**
    * Creates a child container with additional dependencies.
    * Child inherits all parent singletons and can add/override deps.
@@ -105,7 +106,8 @@ export interface IContainer<T extends Record<string, unknown> = Record<string, u
    * );
    * ```
    */
-  module<TNew extends Record<string, unknown>>(
+  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+  module<TNew extends Record<string, any>>(
     fn: (
       builder: ContainerBuilder<Record<string, unknown>, T>,
     ) => ContainerBuilder<Record<string, unknown>, TNew>,

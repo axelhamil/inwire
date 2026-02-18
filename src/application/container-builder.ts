@@ -16,9 +16,11 @@ import { buildContainerProxy } from './container-proxy.js';
  * receive a fully-typed `c` parameter with all previously registered deps.
  */
 export class ContainerBuilder<
-  TContract extends Record<string, unknown> = Record<string, unknown>,
+  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures (Record<string, unknown> requires them)
+  TContract extends Record<string, any> = Record<string, unknown>,
   // biome-ignore lint/complexity/noBannedTypes: {} is the correct generic default for "no deps accumulated yet"
-  TBuilt extends Record<string, unknown> = {},
+  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+  TBuilt extends Record<string, any> = {},
 > {
   private readonly factories = new Map<string, Factory>();
 
@@ -60,7 +62,8 @@ export class ContainerBuilder<
    * Applies a module — a function that chains `.add()` calls on this builder.
    * `c` in the module's factories is fully typed with all previously registered deps.
    */
-  addModule<TNew extends Record<string, unknown>>(
+  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+  addModule<TNew extends Record<string, any>>(
     module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
   ): ContainerBuilder<TContract, TNew> {
     return module(this);
@@ -111,7 +114,8 @@ export class ContainerBuilder<
  * ```
  */
 export function container<
-  T extends Record<string, unknown> = Record<string, unknown>,
+  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+  T extends Record<string, any> = Record<string, unknown>,
 >(): ContainerBuilder<T> {
   return new ContainerBuilder<T>();
 }
