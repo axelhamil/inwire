@@ -2,9 +2,9 @@ import type {
   ContainerGraph,
   ContainerHealth,
   ContainerWarning,
+  IResolver,
   ProviderInfo,
 } from '../domain/types.js';
-import type { Resolver } from '../infrastructure/resolver.js';
 import { isTransient } from '../infrastructure/transient.js';
 
 /**
@@ -12,7 +12,7 @@ import { isTransient } from '../infrastructure/transient.js';
  * Provides `inspect()`, `describe()`, `health()`, and `toString()`.
  */
 export class Introspection {
-  constructor(private readonly resolver: Resolver) {}
+  constructor(private readonly resolver: IResolver) {}
 
   /**
    * Returns the full dependency graph as a serializable JSON object.
