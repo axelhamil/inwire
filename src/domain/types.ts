@@ -50,8 +50,7 @@ export interface ScopeOptions {
  * ```
  */
 // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-export type Container<T extends Record<string, any> = Record<string, unknown>> = T &
-  IContainer<T>;
+export type Container<T extends Record<string, any> = Record<string, unknown>> = T & IContainer<T>;
 
 /**
  * Container methods interface. Defines the API available on every container.
