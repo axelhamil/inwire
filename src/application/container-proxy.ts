@@ -1,9 +1,9 @@
-import { hasOnDestroy } from '../domain/lifecycle.js';
 import type { Container, Factory, ScopeOptions } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
 import { CycleDetector } from '../infrastructure/cycle-detector.js';
 import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
+import { Disposer } from './disposer.js';
 import { Introspection } from './introspection.js';
 import { Preloader } from './preloader.js';
 
@@ -20,6 +20,7 @@ export function buildContainerProxy(
 ): Container<Record<string, unknown>> {
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
+  const disposer = new Disposer(resolver);
   const methods = {
     /**
      * Creates a child container with a parent-child chain.
@@ -94,28 +95,7 @@ export function buildContainerProxy(
     health: () => introspection.health(),
     toString: () => introspection.toString(),
 
-    dispose: async () => {
-      const cache = resolver.getCache();
-      const entries = [...cache.entries()].reverse();
-      const errors: unknown[] = [];
-      for (const [, instance] of entries) {
-        if (hasOnDestroy(instance)) {
-          try {
-            await instance.onDestroy();
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-      }
-      cache.clear();
-      resolver.clearAllInitState();
-      resolver.clearAllDepGraph();
-      resolver.clearWarnings();
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) {
-        throw new AggregateError(errors, `dispose() encountered ${errors.length} errors`);
-      }
-    },
+    dispose: () => disposer.dispose(),
   };
 
   const proxy = new Proxy(
