@@ -1,7 +1,7 @@
 # inwire — Complete API Reference
 
 > Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
-> Proxy-based lazy singleton resolution. ~3.2KB gzipped, 0 runtime deps.
+> Proxy-based lazy singleton resolution. ~4KB gzipped, 0 runtime deps. Clean Architecture internals.
 
 Install: `npm i inwire`
 License: MIT
@@ -11,14 +11,26 @@ Exports: ESM with full .d.mts
 
 The container is a Proxy. Dependencies are defined via a fluent builder: `container().add('key', factory).build()`. Each `.add()` call accumulates the TypeScript type incrementally — the `c` parameter in every factory is typed as the union of all previously registered dependencies.
 
-When you access a property on the built container, the Proxy intercepts it and delegates to the Resolver. The Resolver:
+When you access a property on the built container, the Proxy intercepts it and delegates to the Resolver. The Resolver orchestrates three injected collaborators:
 
-1. Checks the singleton cache — if already resolved, returns the cached instance
-2. Detects circular dependencies via a `resolving` Set
-3. Creates a tracking Proxy to record which other deps the factory accesses (builds the dep graph)
-4. Calls the factory function with the tracking proxy
-5. Caches the result (unless marked transient)
-6. Calls `onInit()` if the instance implements it (fire-and-forget, not awaited)
+1. **CycleDetector** — checks if this key is already mid-resolution (circular dependency guard)
+2. **DependencyTracker** — creates a tracking Proxy that records which other deps the factory accesses (auto-builds the dependency graph)
+3. **Resolver core** — manages the singleton cache and parent chain (for scoped containers)
+
+Resolution flow:
+1. Check the singleton cache — if already resolved, return the cached instance
+2. Ask CycleDetector if this key is already being resolved — if so, throw `CircularDependencyError`
+3. Enter the key in CycleDetector, get a tracking Proxy from DependencyTracker
+4. Call the factory function with the tracking proxy
+5. Record the discovered dependencies in the graph
+6. Cache the result (unless marked transient)
+7. Call `onInit()` if the instance implements it (fire-and-forget during lazy access, properly awaited during `preload()`)
+8. Leave the key in CycleDetector (via try/finally)
+
+The architecture follows Clean Architecture with three layers:
+- **domain/** — Pure contracts (`IResolver`, `ICycleDetector`, `IDependencyTracker`), error types, lifecycle interfaces. Zero external imports.
+- **infrastructure/** — `Resolver`, `CycleDetector`, `DependencyTracker`, `transient()`. Depends only on domain/.
+- **application/** — `ContainerBuilder`, `container-proxy`, `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection`. Depends on domain/ interfaces.
 
 ## container()
 
@@ -144,7 +156,7 @@ const app = container()
 build(): Container<TBuilt>
 ```
 
-Builds and returns the container. Creates the Resolver and Proxy.
+Builds and returns the container. Creates the Resolver (with injected CycleDetector and DependencyTracker) and the Proxy.
 
 ## transient(factory)
 
@@ -152,7 +164,7 @@ Builds and returns the container. Creates the Resolver and Proxy.
 function transient<T>(factory: (container: unknown) => T): (container: unknown) => T
 ```
 
-Marks a factory as transient for use with `scope()` and `extend()`. Internally attaches a `Symbol.for('inwire:transient')` marker.
+Marks a factory as transient for use with `scope()` and `extend()`. Internally stamps the function with `Symbol.for('inwire:transient')` — the Resolver checks this marker to skip caching.
 
 ```typescript
 import { container, transient } from 'inwire';
@@ -311,7 +323,15 @@ await app.preload();
 // resolve ALL dependencies at once
 ```
 
-**GOTCHA — CRITICAL**: `preload()` is the **only** way to properly await async `onInit()` hooks. During normal property access, `onInit()` is called but NOT awaited (fire-and-forget, errors swallowed). If your service has async initialization (e.g. database connection), you MUST use `preload()` to surface errors.
+Internally, `preload()` delegates to the `Preloader` use case which:
+1. Resolves all factories with `onInit()` deferred
+2. Builds the full dependency graph via the tracking proxy
+3. Computes topological levels using Kahn's BFS algorithm
+4. Runs `onInit()` for each level in parallel (`Promise.allSettled`), levels sequentially
+
+If multiple `onInit()` calls throw, errors are collected into an `AggregateError`.
+
+**GOTCHA — CRITICAL**: `preload()` is the **only** way to properly await async `onInit()` hooks. During normal property access, `onInit()` is called but NOT awaited (fire-and-forget, errors stored as `AsyncInitErrorWarning` in `health().warnings`). If your service has async initialization (e.g. database connection), you MUST use `preload()` to surface errors.
 
 ## container.reset(...keys)
 
@@ -396,7 +416,7 @@ interface ContainerHealth {
 }
 
 interface ContainerWarning {
-  type: 'scope_mismatch' | 'duplicate_key';
+  type: 'scope_mismatch' | 'async_init_error';
   message: string;
   details: Record<string, unknown>;
 }
@@ -420,13 +440,15 @@ app.health();
 dispose(): Promise<void>
 ```
 
-Disposes the container. Calls `onDestroy()` on all resolved instances that implement it, in **reverse resolution order** (LIFO). Clears the singleton cache after disposal.
+Disposes the container. Delegates to the internal `Disposer` which calls `onDestroy()` on all resolved instances that implement it, in **reverse resolution order** (LIFO). Resilient: continues calling other `onDestroy()` handlers even if one throws. Clears the singleton cache, init state, and dependency graph after disposal.
 
 ```typescript
 app.db;
 app.cache;
 await app.dispose(); // calls cache.onDestroy() then db.onDestroy()
 ```
+
+If multiple `onDestroy()` calls throw, all errors are collected into an `AggregateError`. If only one throws, the raw error is rethrown.
 
 **GOTCHA**: After `dispose()`, accessing dependencies will re-resolve them (cache is cleared). This can cause unexpected behavior if you continue using the container after disposal.
 
@@ -624,6 +646,18 @@ hint: "The transient value was resolved once and is now frozen inside the single
 
 Constructor: `new ScopeMismatchWarning(singletonKey: string, transientKey: string)`
 Properties: `type: 'scope_mismatch'`, `message`, `hint`, `details: { singleton, transient }`
+
+### AsyncInitErrorWarning
+
+Not an error — a warning emitted when an async `onInit()` rejects during lazy resolution (fire-and-forget). Surfaced via `container.health().warnings`. Use `preload()` to await and surface these errors properly.
+
+```
+onInit() for 'db' rejected: connection refused
+hint: "Use preload('db') to await and handle async init errors."
+```
+
+Constructor: `new AsyncInitErrorWarning(key: string, error: unknown)`
+Properties: `type: 'async_init_error'`, `message`, `hint`, `details: { key, error }`
 
 ## Gotchas and Common Pitfalls
 

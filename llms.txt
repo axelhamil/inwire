@@ -1,9 +1,19 @@
 # inwire
 
 > Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
-> Proxy-based lazy singleton resolution. ~3.2KB gzipped, 0 runtime deps.
+> Proxy-based lazy singleton resolution. ~4KB gzipped, 0 runtime deps.
 
 inwire uses a fluent builder to define dependencies one by one: `container().add('key', factory).build()`. Each `.add()` accumulates the type — the `c` parameter in every factory knows about all previously registered dependencies. Property access on the built container triggers lazy resolution through a Proxy. Instances are cached as singletons by default. Built-in introspection methods return serializable JSON, making the dependency graph directly consumable by LLMs and AI tooling.
+
+## Architecture
+
+Clean Architecture with enforced dependency rule: `domain/` has zero imports from other layers.
+
+- **domain/** — Pure contracts: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator` interfaces; 7 error classes with `hint` + `details`; `OnInit`/`OnDestroy` lifecycle (duck-typed); validation + Levenshtein fuzzy matching.
+- **infrastructure/** — Concrete mechanisms: `Resolver` (lazy resolution, singleton cache, parent chain), `CycleDetector` (circular dep detection), `DependencyTracker` (tracking Proxy + dep graph builder), `transient()` marker.
+- **application/** — Use cases + orchestration: `ContainerBuilder` (fluent builder), `container-proxy` (Proxy construction, scope/extend/reset), `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection` (inspect/describe/health).
+
+SOLID principles: each file has a single responsibility. The Resolver receives collaborators via constructor injection (DIP). Application layer depends on `IResolver` interface, not the concrete class.
 
 ## Core API
 
@@ -23,12 +33,12 @@ inwire uses a fluent builder to define dependencies one by one: `container().add
 - `.scope(extra, options?)` — Creates a child container with additional deps. Child inherits parent singletons. Pass `{ name }` for debugging/introspection.
 - `.extend(extra)` — Returns a new container with merged factories. Shares existing singleton cache.
 - `.module(fn)` — Applies a module post-build using the builder for typed `c`. Semantically equivalent to `extend()` but with incremental type accumulation. `fn` receives a `ContainerBuilder` seeded with the container's type.
-- `.preload(...keys)` — Eagerly resolves specific dependencies, or all if no keys given. Only way to await async `onInit()`.
+- `.preload(...keys)` — Eagerly resolves specific dependencies, or all if no keys given. Only way to await async `onInit()`. Uses topological sorting (Kahn's algorithm) to initialize independent branches in parallel.
 - `.reset(...keys)` — Invalidates cached singletons, forcing re-creation on next access. Does not affect parent scopes.
 - `.inspect()` — Returns the full dependency graph as `ContainerGraph` (serializable JSON).
 - `.describe(key)` — Returns `ProviderInfo` for a single provider.
 - `.health()` — Returns `ContainerHealth` with warnings (e.g. scope mismatches).
-- `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order.
+- `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order. Resilient: collects all errors, throws `AggregateError` if multiple failures.
 
 ## Types
 
@@ -40,7 +50,7 @@ inwire uses a fluent builder to define dependencies one by one: `container().add
 - `ScopeOptions` — `{ name?: string }` — options for `scope()`
 - `ContainerGraph` — `{ name?: string, providers: Record<string, ProviderInfo> }`
 - `ContainerHealth` — `{ totalProviders, resolved, unresolved, warnings }`
-- `ContainerWarning` — `{ type: 'scope_mismatch' | 'duplicate_key', message, details }`
+- `ContainerWarning` — `{ type: 'scope_mismatch' | 'async_init_error', message, details }`
 - `ProviderInfo` — `{ key, resolved, deps, scope: 'singleton' | 'transient' }`
 
 ## Errors
@@ -49,11 +59,12 @@ All errors extend `ContainerError` and include `hint` (actionable fix) and `deta
 
 - `ContainerConfigError` — Non-function value in deps definition (scope/extend)
 - `ReservedKeyError` — Reserved container method name used as dependency key
-- `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion)
+- `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion via Levenshtein)
 - `CircularDependencyError` — Circular dependency detected in resolution chain
 - `UndefinedReturnError` — Factory returned `undefined`
 - `FactoryError` — Factory threw an error during resolution (wraps original error)
 - `ScopeMismatchWarning` — Singleton depends on transient (warning, not error)
+- `AsyncInitErrorWarning` — Async `onInit()` rejected during lazy access (warning, not error)
 
 ## Full Documentation
 

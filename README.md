@@ -106,7 +106,8 @@ app.db; // safe to use, fully initialized
 - **Smart errors** — 7 error types, each with `hint`, `details`, and fuzzy matching ("did you mean `userService`?"). Designed for both humans and LLMs to parse.
 - **Built-in introspection** — `inspect()` returns a serializable JSON graph. Feed it to an LLM, render it in a dashboard, or use `health()` to catch scope mismatches at runtime.
 - **Runtime agnostic** — pure ES2022. No decorators, no `reflect-metadata`, no compiler plugins. Works in Node.js, Deno, Bun, Cloudflare Workers, Vercel Edge, and browsers.
-- **Tiny** — 3.2 KB gzip, zero dependencies.
+- **Clean internals** — Clean Architecture, SOLID, single-responsibility files. Open any file, understand it, change it without fear.
+- **Tiny** — ~4 KB gzip, zero dependencies.
 
 ## Features
 
@@ -346,22 +347,30 @@ detectDuplicateKeys(authModule, userModule);
 
 ## Architecture
 
+Clean Architecture / SOLID internals. The dependency rule is enforced: `domain/` has zero imports from other layers.
+
 ```
 src/
-  index.ts                       # barrel export
-  domain/
-    types.ts                     # interfaces, types, RESERVED_KEYS
-    errors.ts                    # 7 error classes + ScopeMismatchWarning
-    lifecycle.ts                 # OnInit / OnDestroy interfaces
+  index.ts                       # public barrel — only file consumers import
+  domain/                        # pure contracts — no framework deps
+    types.ts                     # interfaces (IResolver, ICycleDetector, IDependencyTracker, IValidator)
+    errors.ts                    # 7 error classes + 2 warning types, each with hint + details
+    lifecycle.ts                 # OnInit / OnDestroy (duck-typed)
     validation.ts                # Validator, detectDuplicateKeys, Levenshtein
-  infrastructure/
-    resolver.ts                  # Resolver (Proxy handler, cache, cycle detection)
-    transient.ts                 # transient() marker
-  application/
-    container-builder.ts         # ContainerBuilder class + container() function
-    container-proxy.ts           # buildContainerProxy + scope/extend inline
+  infrastructure/                # low-level mechanisms — depends on domain/ only
+    resolver.ts                  # lazy resolution, singleton cache, parent chain
+    cycle-detector.ts            # circular dependency detection
+    dependency-tracker.ts        # tracking Proxy + dependency graph builder
+    transient.ts                 # transient() marker (Symbol-based)
+  application/                   # use cases + orchestration — depends on domain/ + infrastructure/
+    container-builder.ts         # fluent builder + container() factory
+    container-proxy.ts           # Proxy construction, scope/extend/reset
+    preloader.ts                 # topological sort (Kahn) + parallel onInit
+    disposer.ts                  # reverse-order onDestroy + cleanup
     introspection.ts             # inspect, describe, health, toString
 ```
+
+Each file has a single responsibility. The Resolver receives its collaborators (`CycleDetector`, `DependencyTracker`) via constructor injection — no internal `new`, no hidden coupling. `Preloader`, `Disposer`, and `Introspection` depend on the `IResolver` interface, not the concrete class.
 
 ## LLM / AI Integration
 
