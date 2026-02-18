@@ -8,57 +8,51 @@ import {
   UndefinedReturnError,
 } from '../domain/errors.js';
 import { hasOnInit } from '../domain/lifecycle.js';
-import type { Factory } from '../domain/types.js';
+import type { Factory, ICycleDetector, IDependencyTracker, IResolver } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
 import { isTransient } from './transient.js';
 
+export interface ResolverDeps {
+  factories: Map<string, Factory>;
+  cache?: Map<string, unknown>;
+  parent?: Resolver;
+  name?: string;
+  initCalled?: Set<string>;
+  cycleDetector: ICycleDetector;
+  dependencyTracker: IDependencyTracker;
+}
+
 /**
- * Core resolver that powers the container's Proxy.
- * Handles lazy resolution, singleton caching, cycle detection,
- * dependency tracking, and scope mismatch warnings.
+ * Core resolver — lazy singleton resolution with parent chain support.
+ * Delegates cycle detection and dependency tracking to injected collaborators.
  */
-export class Resolver {
+export class Resolver implements IResolver {
   private readonly factories: Map<string, Factory>;
   private readonly cache: Map<string, unknown>;
-  private readonly resolving = new Set<string>();
-  private readonly depGraph = new Map<string, string[]>();
   private readonly warnings: AnyWarning[] = [];
   private readonly validator = new Validator();
-  private readonly initCalled = new Set<string>();
+  private readonly initCalled: Set<string>;
   private deferOnInit = false;
 
-  /** Parent resolver for scoped containers */
   private readonly parent?: Resolver;
-
-  /** Optional name for debugging/introspection */
   private readonly name?: string;
+  private readonly cycleDetector: ICycleDetector;
+  private readonly dependencyTracker: IDependencyTracker;
 
-  constructor(
-    factories: Map<string, Factory>,
-    cache?: Map<string, unknown>,
-    parent?: Resolver,
-    name?: string,
-    initCalled?: Set<string>,
-  ) {
-    this.factories = factories;
-    this.cache = cache ?? new Map();
-    this.parent = parent;
-    this.name = name;
-    if (initCalled) this.initCalled = new Set(initCalled);
+  constructor(deps: ResolverDeps) {
+    this.factories = deps.factories;
+    this.cache = deps.cache ?? new Map();
+    this.parent = deps.parent;
+    this.name = deps.name;
+    this.initCalled = deps.initCalled ? new Set(deps.initCalled) : new Set();
+    this.cycleDetector = deps.cycleDetector;
+    this.dependencyTracker = deps.dependencyTracker;
   }
 
   getName(): string | undefined {
     return this.name;
   }
 
-  /**
-   * Resolves a dependency by key.
-   * - Returns cached singleton if available
-   * - Detects circular dependencies
-   * - Tracks dependencies accessed by each factory
-   * - Calls `onInit()` on newly created instances
-   * - Emits scope mismatch warnings
-   */
   resolve(key: string, chain: string[] = []): unknown {
     const factory = this.factories.get(key);
 
@@ -75,16 +69,20 @@ export class Resolver {
       throw new ProviderNotFoundError(key, chain, allKeys, suggestion);
     }
 
-    if (this.resolving.has(key)) {
+    if (this.cycleDetector.isResolving(key)) {
       throw new CircularDependencyError(key, [...chain]);
     }
 
-    this.resolving.add(key);
+    this.cycleDetector.enter(key);
     const currentChain = [...chain, key];
 
     try {
       const deps: string[] = [];
-      const trackingProxy = this.createTrackingProxy(deps, currentChain);
+      const trackingProxy = this.dependencyTracker.createTrackingProxy(
+        deps,
+        currentChain,
+        (depKey, depChain) => this.resolve(depKey, depChain),
+      );
 
       const instance = factory(trackingProxy);
 
@@ -92,7 +90,7 @@ export class Resolver {
         throw new UndefinedReturnError(key, currentChain);
       }
 
-      this.depGraph.set(key, deps);
+      this.dependencyTracker.recordDeps(key, deps);
 
       if (!isTransient(factory)) {
         for (const dep of deps) {
@@ -129,7 +127,7 @@ export class Resolver {
       }
       throw new FactoryError(key, currentChain, error);
     } finally {
-      this.resolving.delete(key);
+      this.cycleDetector.leave(key);
     }
   }
 
@@ -138,7 +136,7 @@ export class Resolver {
   }
 
   getDepGraph(): Map<string, string[]> {
-    return new Map(this.depGraph);
+    return this.dependencyTracker.getDepGraph();
   }
 
   getResolvedKeys(): string[] {
@@ -192,11 +190,11 @@ export class Resolver {
   }
 
   clearDepGraph(...keys: string[]): void {
-    for (const key of keys) this.depGraph.delete(key);
+    this.dependencyTracker.clearDepGraph(...keys);
   }
 
   clearAllDepGraph(): void {
-    this.depGraph.clear();
+    this.dependencyTracker.clearAllDepGraph();
   }
 
   clearWarnings(): void {
@@ -218,24 +216,6 @@ export class Resolver {
 
   getInitCalled(): Set<string> {
     return this.initCalled;
-  }
-
-  /**
-   * Creates a Proxy that records which keys a factory accesses.
-   * This builds the dependency graph automatically.
-   */
-  private createTrackingProxy(deps: string[], chain: string[]): unknown {
-    return new Proxy(
-      {},
-      {
-        get: (_target, prop) => {
-          if (typeof prop === 'symbol') return undefined;
-          const depKey = prop;
-          deps.push(depKey);
-          return this.resolve(depKey, chain);
-        },
-      },
-    );
   }
 
   /** Look up a factory in this resolver or its parent chain. */

@@ -1,6 +1,8 @@
 import { ReservedKeyError } from '../domain/errors.js';
 import type { Container, Factory, RESERVED_KEYS } from '../domain/types.js';
 import { RESERVED_KEYS as RESERVED } from '../domain/types.js';
+import { CycleDetector } from '../infrastructure/cycle-detector.js';
+import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
 import { transient as markTransient } from '../infrastructure/transient.js';
 import { buildContainerProxy } from './container-proxy.js';
@@ -81,7 +83,11 @@ export class ContainerBuilder<
    * Builds and returns the final container.
    */
   build(): Container<TBuilt> {
-    const resolver = new Resolver(new Map(this.factories));
+    const resolver = new Resolver({
+      factories: new Map(this.factories),
+      cycleDetector: new CycleDetector(),
+      dependencyTracker: new DependencyTracker(),
+    });
     return buildContainerProxy(resolver, () => new ContainerBuilder()) as Container<TBuilt>;
   }
 

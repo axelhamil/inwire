@@ -1,6 +1,8 @@
 import { hasOnDestroy } from '../domain/lifecycle.js';
 import type { Container, Factory, ScopeOptions } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
+import { CycleDetector } from '../infrastructure/cycle-detector.js';
+import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
 import { Introspection } from './introspection.js';
 
@@ -81,7 +83,13 @@ export function buildContainerProxy(
       for (const [key, factory] of Object.entries(extra)) {
         childFactories.set(key, factory as Factory);
       }
-      const childResolver = new Resolver(childFactories, new Map(), resolver, options?.name);
+      const childResolver = new Resolver({
+        factories: childFactories,
+        parent: resolver,
+        name: options?.name,
+        cycleDetector: new CycleDetector(),
+        dependencyTracker: new DependencyTracker(),
+      });
       return buildContainerProxy(childResolver, builderFactory);
     },
 
@@ -97,13 +105,13 @@ export function buildContainerProxy(
       for (const [key, factory] of Object.entries(extra)) {
         merged.set(key, factory as Factory);
       }
-      const newResolver = new Resolver(
-        merged,
-        new Map(resolver.getCache()),
-        undefined,
-        undefined,
-        resolver.getInitCalled(),
-      );
+      const newResolver = new Resolver({
+        factories: merged,
+        cache: new Map(resolver.getCache()),
+        initCalled: resolver.getInitCalled(),
+        cycleDetector: new CycleDetector(),
+        dependencyTracker: new DependencyTracker(),
+      });
       return buildContainerProxy(newResolver, builderFactory);
     },
 
