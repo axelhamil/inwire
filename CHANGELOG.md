@@ -1,3 +1,10 @@
+## [2.1.6](https://github.com/axelhamil/inwire/compare/v2.1.5...v2.1.6) (2026-02-19)
+
+
+### Bug Fixes
+
+* remove unnecessary hash option for tsdown v0.20 ([17a71b0](https://github.com/axelhamil/inwire/commit/17a71b076a2553b17ea2501b7f10c66d64dc46b3))
+
 ## [2.1.5](https://github.com/axelhamil/inwire/compare/v2.1.4...v2.1.5) (2026-02-19)
 
 
