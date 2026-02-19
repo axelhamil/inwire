@@ -13,6 +13,7 @@ export type Factory<T = unknown> = (container: unknown) => T;
 
 /**
  * Reserved method names on the container that cannot be used as dependency keys.
+ * These methods are part of the public API of the built container.
  */
 export const RESERVED_KEYS = [
   'scope',
@@ -33,7 +34,10 @@ export type ReservedKey = (typeof RESERVED_KEYS)[number];
  * Options for creating a scoped container.
  */
 export interface ScopeOptions {
-  /** Optional name for the scope, useful for debugging and introspection. */
+  /**
+   * Optional name for the scope, useful for debugging and introspection.
+   * If provided, `String(container)` will return `Scope(name)`.
+   */
   name?: string;
 }
 
@@ -46,7 +50,7 @@ export interface ScopeOptions {
  * const c = container()
  *   .add('logger', () => new LoggerService())
  *   .build();
- * c.logger; // LoggerService
+ * c.logger; // LoggerService (lazy, singleton)
  * c.inspect(); // ContainerGraph
  * ```
  */
@@ -60,7 +64,13 @@ export type Container<T extends Record<string, any> = Record<string, unknown>> =
 export interface IContainer<T extends Record<string, any> = Record<string, unknown>> {
   /**
    * Creates a child container with additional dependencies.
-   * Child inherits all parent singletons and can add/override deps.
+   * Child inherits all parent singletons via a parent Resolver chain.
+   *
+   * Scoped singletons are independent — they are cached in the child's own cache.
+   * Child can override parent keys with different types/factories.
+   *
+   * @param extra - Map of factories for new/overridden dependencies
+   * @param options - Optional configuration like scope name
    *
    * @example
    * ```typescript
@@ -78,8 +88,13 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   >;
 
   /**
-   * Returns a new container with additional dependencies.
-   * Existing singletons are shared. The original container is not modified.
+   * Returns a new container with additional dependencies merging with the current ones.
+   * Unlike `scope()`, the existing singleton cache is SHARED (copied).
+   * Already-resolved singletons from the original container are reused.
+   *
+   * The original container remains unmodified.
+   *
+   * @param extra - Map of factories for new/overridden dependencies
    *
    * @example
    * ```typescript
@@ -95,15 +110,17 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   >;
 
   /**
-   * Applies a module post-build using the builder pattern.
-   * Semantically equivalent to `extend()` but uses `ContainerBuilder` for
-   * incremental type accumulation of `c` in factories.
+   * Applies a module post-build using the builder pattern for incremental type accumulation.
+   * Semantically equivalent to `extend()` but provides a `ContainerBuilder` to the callback.
+   * This allows factories to see types of dependencies added earlier in the same module.
+   *
+   * @param fn - Callback receiving a builder initialized with current container state
    *
    * @example
    * ```typescript
    * const withDb = app.module((b) => b
    *   .add('db', (c) => new Database(c.config))
-   *   .add('cache', (c) => new Redis(c.config))
+   *   .add('cache', (c) => new Redis(c.db)) // c knows about 'db'
    * );
    * ```
    */
@@ -115,8 +132,13 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   ): Container<TNew>;
 
   /**
-   * Pre-resolves dependencies (warm-up).
-   * Call with specific keys to resolve only those, or without arguments to resolve all.
+   * Pre-resolves dependencies (warm-up) and awaits their `onInit` lifecycle hooks.
+   * Resolves only requested keys if provided, otherwise resolves all registered dependencies.
+   *
+   * Performance optimization: dependencies are resolved in parallel based on topological sort levels.
+   *
+   * @param keys - Optional specific keys to preload
+   * @returns Promise that resolves once all preloaded dependencies and their `onInit` hooks complete
    *
    * @example
    * ```typescript
@@ -128,18 +150,20 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
 
   /**
    * Returns the full dependency graph as a serializable JSON object.
-   * Useful for AI analysis of the architecture.
+   * Includes provider status, discovered dependencies, and resolution state.
    *
    * @example
    * ```typescript
-   * container.inspect();
-   * // { providers: { logger: { key: 'logger', resolved: true, deps: [], scope: 'singleton' } } }
+   * const graph = container.inspect();
+   * console.log(JSON.stringify(graph, null, 2));
    * ```
    */
   inspect(): ContainerGraph;
 
   /**
    * Returns detailed information about a specific provider.
+   *
+   * @param key - The dependency key to describe
    *
    * @example
    * ```typescript
@@ -150,19 +174,22 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   describe(key: keyof T | string): ProviderInfo;
 
   /**
-   * Returns container health status and warnings.
+   * Returns container health status including counts and warnings.
+   * Use this to detect issues like scope mismatches or async initialization errors.
    *
    * @example
    * ```typescript
-   * container.health();
-   * // { totalProviders: 12, resolved: ['db', 'logger'], unresolved: ['cache'], warnings: [] }
+   * const { totalProviders, warnings } = container.health();
+   * if (warnings.length > 0) console.warn(warnings);
    * ```
    */
   health(): ContainerHealth;
 
   /**
    * Invalidates cached singletons, forcing re-creation on next access.
-   * Does not affect parent scopes.
+   * Does not affect parent containers in a scope chain.
+   *
+   * @param keys - Keys to reset. If none provided, this is a no-op.
    *
    * @example
    * ```typescript
@@ -173,8 +200,10 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   reset(...keys: (keyof T)[]): void;
 
   /**
-   * Disposes the container. Calls `onDestroy()` on all resolved instances
-   * that implement it, in reverse resolution order.
+   * Disposes the container by calling `onDestroy()` on all resolved instances.
+   * Hooks are executed in reverse resolution order (LIFO).
+   *
+   * Resilient: continues calling other hooks even if one fails.
    *
    * @example
    * ```typescript
@@ -185,39 +214,56 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
 }
 
 /**
- * Full dependency graph of the container.
+ * Full dependency graph representation of a container.
  */
 export interface ContainerGraph {
+  /** Optional name of the container/scope. */
   name?: string;
+  /** Map of registered provider information. */
   providers: Record<string, ProviderInfo>;
 }
 
 /**
- * Detailed information about a single provider/dependency.
+ * Detailed metadata about a single dependency provider.
  */
 export interface ProviderInfo {
+  /** The unique identifier for this dependency. */
   key: string;
+  /** Whether the dependency has been resolved into a value/singleton. */
   resolved: boolean;
+  /** List of dependency keys discovered during resolution of this provider. */
   deps: string[];
+  /** Lifecycle scope: singleton (cached) or transient (new instance every time). */
   scope: 'singleton' | 'transient';
 }
 
 /**
- * Container health status with warnings.
+ * Snapshot of container health state and diagnostic warnings.
  */
 export interface ContainerHealth {
+  /** Total number of registered providers. */
   totalProviders: number;
+  /** List of keys already resolved. */
   resolved: string[];
+  /** List of keys not yet resolved (lazy). */
   unresolved: string[];
+  /** Diagnostic warnings discovered during runtime or resolution. */
   warnings: ContainerWarning[];
 }
 
 /**
- * A warning detected by the container's runtime analysis.
+ * A diagnostic warning detected by the container's runtime analysis.
  */
 export interface ContainerWarning {
+  /**
+   * Warning type:
+   * - `scope_mismatch`: A singleton depends on a transient (value gets frozen inside the singleton).
+   * - `async_init_error`: An async `onInit` hook failed during fire-and-forget lazy resolution.
+   */
   type: 'scope_mismatch' | 'async_init_error';
+  /** Human-readable warning message. */
   message: string;
+  /** Structured context for the warning. */
   details: Record<string, unknown>;
 }
 
