@@ -249,7 +249,7 @@ const app = container()
 Why this works:
 - Each module declares only what it **needs** — no import of a global `AppDeps` interface.
 - The output type is inferred from the `.add()` chain — no duplicated signatures.
-- Order of `addModule()` is enforced at compile time: applying `userModule` before `dbModule` would fail the prerequisite check.
+- `addModule()` does not enforce prereq satisfaction at the type level — `c.X` is typed via the module's `<TDeps>` (or the global `AppDeps`), and missing keys raise `ProviderNotFoundError` at resolution time. The trade-off: cross-module forward references and global-mode (`defineModule()` + `AppDeps`) work without ordering constraints.
 
 #### `.merge()` — fuse standalone builders
 

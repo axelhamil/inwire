@@ -126,12 +126,16 @@ app.requestId === app.requestId;   // false — new every time
 ### .addModule(module)
 
 ```typescript
-addModule<TNew extends Record<string, any>>(
-  module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
-): ContainerBuilder<TContract, TBuilt & TNew>
+addModule<TDepsM extends Record<string, any>, TNew extends Record<string, any>>(
+  module: (builder: ContainerBuilder<TContract, TDepsM>) => ContainerBuilder<TContract, TNew>,
+): ContainerBuilder<TContract, Override<TBuilt, TNew>>
 ```
 
-Applies a `Module` (typically produced by `defineModule()`) to the builder. The accumulated `TBuilt` is preserved across the call — chaining `addModule()` accumulates bindings from every applied module. `c` in the module's factories is typed according to the module's declared mode (see `defineModule()` below).
+Applies a `Module` (typically produced by `defineModule()`) to the builder. The accumulated `TBuilt` is preserved across the call — chaining `addModule()` accumulates bindings from every applied module.
+
+`TDepsM` (what the module expects) is inferred independently from the builder's current `TBuilt`. **Prereq satisfaction is not checked at the type level on purpose**: in global mode (`defineModule()` typed against `AppDeps`) the prereq surface is the full app, never the partial builder state. Missing prereqs are caught at resolution time via `ProviderNotFoundError`. `c` in the module's factories is typed according to the module's declared mode (see `defineModule()` below).
+
+`Override<TBuilt, TNew> = Omit<TBuilt, keyof TNew> & TNew` — keys present in both the existing builder and the module are taken from the module (last write wins). This avoids `A & A → never` collapses that occur when the same class is referenced through both `AppDeps` and a module's `.add()` (TypeScript intersects classes with private members nominally).
 
 ```typescript
 import { container, defineModule } from 'inwire';
@@ -183,10 +187,10 @@ Builds and returns the container. Creates the Resolver (with injected CycleDetec
 ## transient(factory)
 
 ```typescript
-function transient<T>(factory: (container: unknown) => T): (container: unknown) => T
+function transient<T, C = unknown>(factory: (container: C) => T): (container: C) => T
 ```
 
-Marks a factory as transient for use with `scope()` and `extend()`. Internally stamps the function with `Symbol.for('inwire:transient')` — the Resolver checks this marker to skip caching.
+Marks a factory as transient for use with `scope()` and `extend()`. The `C` generic propagates the container type from the call site, so `c` is fully typed when used inside `extend({...})` or `scope({...})` — no manual annotation needed. Internally stamps the function with `Symbol.for('inwire:transient')` — the Resolver checks this marker to skip caching.
 
 ```typescript
 import { container, transient } from 'inwire';
