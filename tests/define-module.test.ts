@@ -122,6 +122,20 @@ describe('defineModule()', () => {
       expectTypeOf(c.db).toEqualTypeOf<string>();
     });
 
+    it('chained addModule() preserves the accumulated TBuilt across modules', () => {
+      const m1 = defineModule()((b) => b.add('a', () => 1).add('b', () => 'hi'));
+      const m2 = defineModule<{ a: number }>()((b) => b.add('c', () => true));
+
+      const c = container().addModule(m1).addModule(m2).build();
+
+      expectTypeOf(c.a).toEqualTypeOf<number>();
+      expectTypeOf(c.b).toEqualTypeOf<string>();
+      expectTypeOf(c.c).toEqualTypeOf<boolean>();
+      expect(c.a).toBe(1);
+      expect(c.b).toBe('hi');
+      expect(c.c).toBe(true);
+    });
+
     it('Module<TDeps, TBuilt> is assignable to addModule() argument', () => {
       const m: Module<{ a: number }, { a: number; b: string }> = defineModule<{ a: number }>()(
         (b) => b.add('b', (c) => `n=${c.a}`),

@@ -67,8 +67,8 @@ export class ContainerBuilder<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   addModule<TNew extends Record<string, any>>(
     module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
-  ): ContainerBuilder<TContract, TNew> {
-    return module(this);
+  ): ContainerBuilder<TContract, TBuilt & TNew> {
+    return module(this) as unknown as ContainerBuilder<TContract, TBuilt & TNew>;
   }
 
   /**
