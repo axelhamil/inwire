@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/axelhamil/inwire/compare/v2.2.1...v2.3.0) (2026-05-02)
+
+
+### Features
+
+* **typing:** cross-module forward refs via augmentable AppDeps interface ([b4ac943](https://github.com/axelhamil/inwire/commit/b4ac9432982cff11ae7fb837f9783dbcc489f7ea))
+
 ## [2.2.1](https://github.com/axelhamil/inwire/compare/v2.2.0...v2.2.1) (2026-05-02)
 
 
