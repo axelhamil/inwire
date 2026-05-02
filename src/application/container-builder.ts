@@ -72,8 +72,32 @@ export class ContainerBuilder<
   }
 
   /**
+   * Merges a standalone builder into this one. All factories of `other` are copied.
+   * The accumulated type becomes `TBuilt & TOther`, so subsequent factories can
+   * consume keys from either side.
+   *
+   * Use this to compose builders that were defined independently:
+   * ```typescript
+   * const dbModule = container().add('db', () => new DB());
+   * const di = container().add('logger', () => new Logger()).merge(dbModule).build();
+   * ```
+   *
+   * Cross-builder dependencies are resolved at build time. Reserved keys throw.
+   * Duplicate keys override silently — same semantics as `.add()` over an existing key.
+   */
+  merge<TOther extends Record<string, unknown>>(
+    other: ContainerBuilder<Record<string, unknown>, TOther>,
+  ): ContainerBuilder<TContract, TBuilt & TOther> {
+    for (const [key, factory] of Object.entries(other._toRecord())) {
+      this.validateKey(key);
+      this.factories.set(key, factory);
+    }
+    return this as unknown as ContainerBuilder<TContract, TBuilt & TOther>;
+  }
+
+  /**
    * Returns the accumulated factories as a plain record.
-   * @internal Used by `module()` on the container.
+   * @internal Used by `module()` on the container and `merge()` on builders.
    */
   _toRecord(): Record<string, Factory> {
     return Object.fromEntries(this.factories);
