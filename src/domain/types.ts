@@ -30,6 +30,30 @@ export const RESERVED_KEYS = [
 export type ReservedKey = (typeof RESERVED_KEYS)[number];
 
 /**
+ * Global, augmentable interface describing the application's dependency shape.
+ *
+ * Empty by default. Each module file augments it with the bindings IT provides,
+ * enabling **cross-module forward references** in factories — `c.X` resolves
+ * even when `X` is added by another module loaded later.
+ *
+ * @example Augment from a module file:
+ * ```typescript
+ * declare module 'inwire' {
+ *   interface AppDeps {
+ *     IUserRepository: IUserRepository;
+ *     SignInUseCase: SignInUseCase;
+ *   }
+ * }
+ * ```
+ *
+ * When `defineModule()` is called without an explicit `<TDeps>` generic, the
+ * builder's `c` parameter is typed as `AppDeps` — the union of every module's
+ * augmentations. TypeScript merges these declarations across files.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: empty interface IS the augmentation surface — required so users can `declare module 'inwire' { interface AppDeps { ... } }`
+export interface AppDeps {}
+
+/**
  * Options for creating a scoped container.
  */
 export interface ScopeOptions {

@@ -30,6 +30,8 @@
     "example:test": "tsx examples/02-modular-testing.ts",
     "example:plugin": "tsx examples/03-plugin-system.ts",
     "example:modules": "tsx examples/04-modules.ts",
+    "example:typing": "tsx examples/05-zod-style-typing.ts",
+    "example:pinia": "tsx examples/06-pinia-augmentation.ts",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

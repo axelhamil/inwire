@@ -1,3 +1,4 @@
+import type { AppDeps } from '../domain/types.js';
 import type { ContainerBuilder } from './container-builder.js';
 
 /**
@@ -9,9 +10,8 @@ import type { ContainerBuilder } from './container-builder.js';
  * Use {@link defineModule} to build a `Module` with strong inference.
  */
 export type Module<
-  // biome-ignore lint/complexity/noBannedTypes: {} is the correct generic default for "no required deps"
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-  TDeps extends Record<string, any> = {},
+  TDeps extends Record<string, any> = AppDeps,
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   TBuilt extends Record<string, any> = TDeps,
 > = (
@@ -19,30 +19,49 @@ export type Module<
 ) => ContainerBuilder<Record<string, unknown>, TBuilt>;
 
 /**
- * Defines a reusable, strongly-typed module without importing the host's deps interface.
+ * Defines a reusable, strongly-typed module.
  *
- * Pattern: `defineModule<Prerequisites>()(builder => builder.add(...))`.
- * Prerequisites are declared **locally**, not pulled from a global `AppDeps`.
- * The output type is **inferred** from the chained `.add()` calls — no manual signature.
+ * Two modes, picked by whether you pass `<TDeps>` explicitly:
  *
- * @example
+ * - **Global mode** (`defineModule()`, no generic): `c` is typed as `AppDeps`,
+ *   the augmentable global interface. Each module file augments `AppDeps` with
+ *   what it provides via `declare module 'inwire' { interface AppDeps { … } }`.
+ *   Cross-module forward references work transparently — `c.X` resolves even
+ *   when `X` is added by another module.
+ * - **Local mode** (`defineModule<TDeps>()`): `c` is typed as `TDeps`, declared
+ *   locally inline. No global augmentation needed. Use when the module's
+ *   prerequisites are a tight, fixed surface.
+ *
+ * The output type is always **inferred** from the chained `.add()` calls.
+ *
+ * @example Global mode (Pinia-style):
  * ```typescript
- * import { defineModule } from 'inwire';
+ * declare module 'inwire' {
+ *   interface AppDeps {
+ *     IUserRepository: IUserRepository;
+ *     SignInUseCase: SignInUseCase;
+ *   }
+ * }
  *
+ * export const authModule = defineModule()((b) =>
+ *   b
+ *     .add('IUserRepository', () => new DrizzleUserRepository())
+ *     .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
+ *   //                                                                   ^^^^^^^^^^^^^^^
+ *   //                                          provided by another module — typed via AppDeps
+ * );
+ * ```
+ *
+ * @example Local mode (explicit prerequisites):
+ * ```typescript
  * const billingModule = defineModule<{ eventBus: EventBus }>()((b) =>
  *   b.add('subscribeUseCase', (c) => new SubscribeUseCase(c.eventBus)),
  * );
- *
- * const di = container()
- *   .add('eventBus', () => new EventBus())
- *   .addModule(billingModule)
- *   .build();
  * ```
  */
 export function defineModule<
-  // biome-ignore lint/complexity/noBannedTypes: {} is the correct generic default for "no prerequisites"
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-  TDeps extends Record<string, any> = {},
+  TDeps extends Record<string, any> = AppDeps,
 >() {
   return <
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures

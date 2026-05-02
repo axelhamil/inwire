@@ -123,30 +123,52 @@ app.logger === app.logger;         // true  — singleton
 app.requestId === app.requestId;   // false — new every time
 ```
 
-### .addModule(fn)
+### .addModule(module)
 
 ```typescript
-addModule<TNew extends Record<string, unknown>>(
+addModule<TNew extends Record<string, any>>(
   module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
-): ContainerBuilder<TContract, TNew>
+): ContainerBuilder<TContract, TBuilt & TNew>
 ```
 
-Applies a module — a function that chains `.add()` calls on the builder. `c` in the module's factories is fully typed with all previously registered deps.
+Applies a `Module` (typically produced by `defineModule()`) to the builder. The accumulated `TBuilt` is preserved across the call — chaining `addModule()` accumulates bindings from every applied module. `c` in the module's factories is typed according to the module's declared mode (see `defineModule()` below).
 
 ```typescript
-import { container, ContainerBuilder } from 'inwire';
+import { container, defineModule } from 'inwire';
 
-function dbModule<T extends { config: { dbUrl: string } }>(
-  b: ContainerBuilder<Record<string, unknown>, T>,
-) {
-  return b
+const dbModule = defineModule<{ config: { dbUrl: string } }>()((b) =>
+  b
     .add('db', (c) => new Database(c.config.dbUrl))
-    .add('cache', (c) => new Redis(c.config.dbUrl));
-}
+    .add('cache', (c) => new Redis(c.config.dbUrl)),
+);
 
 const app = container()
   .add('config', { dbUrl: 'postgres://...' })
   .addModule(dbModule)
+  .build();
+```
+
+### .merge(otherBuilder)
+
+```typescript
+merge<TOther extends Record<string, unknown>>(
+  other: ContainerBuilder<Record<string, unknown>, TOther>,
+): ContainerBuilder<TContract, TBuilt & TOther>
+```
+
+Fuses a standalone `ContainerBuilder` into this one. All factories of `other` are copied into the host. Cross-builder dependencies are resolved at build time. Reserved keys throw; duplicate keys override silently (last write wins, same semantics as `.add()` over an existing key).
+
+Use `.merge()` when a module has no external prerequisites and is naturally expressed as a standalone builder rather than a `Module`.
+
+```typescript
+const dbModule = container()
+  .add('db', () => new Database())
+  .add('cache', (c) => new Redis(c.db));
+
+const app = container()
+  .add('logger', () => new Logger())
+  .merge(dbModule)
+  .add('api', (c) => new Api(c.db, c.logger))
   .build();
 ```
 
@@ -181,6 +203,84 @@ extended.requestId === extended.requestId; // false — new every time
 ```
 
 Use `addTransient()` on the builder for transient deps at build time. Use `transient()` wrapper for scope/extend.
+
+## defineModule()
+
+```typescript
+function defineModule<TDeps extends Record<string, any> = AppDeps>(): <TBuilt>(
+  fn: (builder: ContainerBuilder<Record<string, unknown>, TDeps>)
+       => ContainerBuilder<Record<string, unknown>, TBuilt>,
+) => Module<TDeps, TBuilt>
+```
+
+Defines a reusable, strongly-typed module. Two modes pick by whether you pass `<TDeps>` explicitly:
+
+### Local mode — `defineModule<TDeps>()`
+
+`c` in the module's factories is typed as `TDeps`, declared inline. The module's prerequisites are listed locally — no global state, no cross-file coupling. Best when prereqs are a small, fixed surface.
+
+```typescript
+const billingModule = defineModule<{ eventBus: EventBus }>()((b) =>
+  b.add('subscribeUseCase', (c) => new SubscribeUseCase(c.eventBus)),
+);
+
+const app = container()
+  .add('eventBus', () => new EventBus())
+  .addModule(billingModule)
+  .build();
+```
+
+The output type is **inferred** from the chained `.add()` calls — no manual signature.
+
+### Global mode — `defineModule()` (no generic)
+
+`c` is typed as `AppDeps`, the augmentable global interface. Each module file augments `AppDeps` with the bindings **it provides** via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript merges declarations across files, so `c.X` resolves transparently across modules — even when `X` is added by another module loaded later. **Cross-module forward references work, regardless of `addModule()` order.**
+
+```typescript
+// modules/auth.module.ts
+declare module 'inwire' {
+  interface AppDeps {
+    IAuthProvider: IAuthProvider;
+    SignInUseCase: SignInUseCase;
+  }
+}
+
+export const authModule = defineModule()((b) =>
+  b
+    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
+    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
+  //                                              ^^^^^^^^^^^^^^^^^^^^
+  //                       provided by another module — typed via merged AppDeps
+);
+```
+
+### Trade-off
+
+| Pattern | You declare | Cross-module forward ref |
+|---|---|---|
+| `defineModule<TDeps>()` | what the module **consumes** (inputs) | no |
+| `defineModule()` + `declare module` | what the module **adds** (outputs) | yes — order-independent |
+
+Both patterns coexist. Mix freely — passing `<TDeps>` always overrides the global mode for that module. `defineModule()` returns the same `Module<TDeps, TBuilt>` shape in both modes.
+
+### Type helpers
+
+```typescript
+type InferModuleDeps<M>   = M extends Module<infer D, any> ? D : never;
+type InferModuleBuilt<M>  = M extends Module<any, infer B> ? B : never;
+```
+
+Useful when authoring higher-order helpers that compose modules.
+
+## AppDeps (augmentable global interface)
+
+```typescript
+export interface AppDeps {}
+```
+
+Empty by default. The augmentation surface for global-mode `defineModule()`. Each module file declares what it provides via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript performs declaration merging across all files, building a single union that `c` is typed against in global-mode factories.
+
+`AppDeps` is exported type-only from the package barrel. There is **no runtime cost** — augmentations are erased after type-checking. The runtime relies on the existing tracking Proxy + lazy resolver, which already handles arbitrary key access.
 
 ## container.scope(extra, options?)
 
@@ -541,8 +641,21 @@ test.userService; // uses mocked deps
 ## Type Utilities
 
 ```typescript
+// Container shape (resolved deps + container methods)
 type Container<T extends Record<string, unknown> = Record<string, unknown>> = T & IContainer<T>;
 interface ScopeOptions { name?: string }
+
+// Augmentable global interface — see "AppDeps" section above
+interface AppDeps {}
+
+// Module type — produced by defineModule()
+type Module<TDeps extends Record<string, any> = AppDeps, TBuilt extends Record<string, any> = TDeps> =
+  (builder: ContainerBuilder<Record<string, unknown>, TDeps>)
+    => ContainerBuilder<Record<string, unknown>, TBuilt>;
+
+// Inference helpers for Module<TDeps, TBuilt>
+type InferModuleDeps<M>  = M extends Module<infer D, any> ? D : never;
+type InferModuleBuilt<M> = M extends Module<any, infer B> ? B : never;
 ```
 
 Internal types (not exported from barrel):

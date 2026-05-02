@@ -37,6 +37,7 @@ export {
 } from './domain/errors.js';
 export type { OnDestroy, OnInit } from './domain/lifecycle.js';
 export type {
+  AppDeps,
   Container,
   ContainerGraph,
   ContainerHealth,

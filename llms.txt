@@ -18,6 +18,7 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 ## Core API
 
 - `container<T?>()` — Creates a `ContainerBuilder`. Pass interface `T` for contract mode (constrains keys and return types).
+- `defineModule<TDeps?>()(fn)` — Defines a reusable, strongly-typed module. Without `<TDeps>`, `c` is typed as the global augmentable `AppDeps` interface (cross-module forward references). With `<TDeps>`, `c` is typed locally — the module declares its prerequisites inline.
 - `transient(factory)` — Marks a factory as transient for scope/extend (new instance on every access, no caching).
 - `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object.
 
@@ -25,7 +26,8 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 
 - `.add(key, factory)` — Register a dependency. Factory `(c) => value` is lazy; non-function value is eager (instance).
 - `.addTransient(key, factory)` — Register a transient dependency (fresh instance on every access).
-- `.addModule(fn)` — Apply a module `(builder) => builder` pre-build.
+- `.addModule(module)` — Apply a `Module` (typically produced by `defineModule()`). Accumulates the module's bindings into the builder; preserves the previously accumulated `TBuilt`.
+- `.merge(otherBuilder)` — Fuse a standalone `ContainerBuilder` into this one. Copies factories; cross-builder dependencies resolve at build time. Use for modules with no prerequisites.
 - `.build()` — Build and return the container.
 
 ## Container Methods
@@ -42,9 +44,12 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 
 ## Types
 
+- `AppDeps` — Augmentable global interface. Empty by default. Augmented per module via `declare module 'inwire' { interface AppDeps { … } }` to enable cross-module forward references when using `defineModule()` without `<TDeps>`.
 - `Container<T>` — Resolved deps + container methods
 - `ContainerBuilder<TContract, TBuilt>` — Fluent builder class (also used in `module()` callbacks)
 - `IContainer<T>` — Container methods interface
+- `Module<TDeps, TBuilt>` — Type of a module produced by `defineModule()`. `TDeps` are the prereqs, `TBuilt` is `TDeps` plus what the module adds.
+- `InferModuleDeps<M>` / `InferModuleBuilt<M>` — Type helpers to extract a module's prerequisites and full output.
 - `OnInit` — Interface: `onInit(): void | Promise<void>`
 - `OnDestroy` — Interface: `onDestroy(): void | Promise<void>`
 - `ScopeOptions` — `{ name?: string }` — options for `scope()`

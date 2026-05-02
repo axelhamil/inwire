@@ -7,7 +7,7 @@ inwire — type-safe dependency injection for TypeScript. ESM-only library, zero
 ## Commands
 
 ```bash
-pnpm test              # vitest run (224 tests, 20 files)
+pnpm test              # vitest run (245 tests, 23 files)
 pnpm test:watch        # vitest in watch mode
 pnpm test:coverage     # vitest run --coverage (thresholds: 90% all metrics)
 pnpm build             # tsdown → dist/index.mjs + dist/index.d.mts
@@ -30,7 +30,7 @@ src/
 ```
 
 ### domain/ (innermost)
-- `types.ts` — All interfaces: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`, `IContainer`, `Container<T>`, `Factory<T>`, `RESERVED_KEYS`
+- `types.ts` — All interfaces: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`, `IContainer`, `Container<T>`, `Factory<T>`, `RESERVED_KEYS`, `AppDeps` (augmentable global interface for cross-module typing)
 - `errors.ts` — 7 error classes (all extend `ContainerError` with `hint` + `details`) + 2 warning types
 - `lifecycle.ts` — `OnInit`/`OnDestroy` interfaces + duck-type guards (`hasOnInit`, `hasOnDestroy`)
 - `validation.ts` — `Validator` class (implements `IValidator`), `detectDuplicateKeys`, Levenshtein distance
@@ -44,7 +44,7 @@ src/
 ### application/ (outermost)
 - `container-builder.ts` — `ContainerBuilder` fluent API (`.add`/`.addTransient`/`.addModule`/`.merge`/`.build`) + `container()` factory. Composition Root: instantiates Resolver with its collaborators.
 - `container-proxy.ts` — `buildContainerProxy()`. Creates the ES Proxy, dispatches to Preloader/Disposer/Introspection. Also a Composition Root (creates Resolvers for scope/extend).
-- `define-module.ts` — `defineModule<TDeps>()(fn)` helper + `Module<TDeps, TBuilt>`, `InferModuleDeps`, `InferModuleBuilt` types. Lets users build reusable modules without importing a global `AppDeps` interface; `TBuilt` is inferred from the chained `.add()` calls.
+- `define-module.ts` — `defineModule<TDeps>()(fn)` helper + `Module<TDeps, TBuilt>`, `InferModuleDeps`, `InferModuleBuilt` types. Two modes: **local** (`defineModule<TDeps>()` — `c` typed locally) and **global** (`defineModule()` — `c` typed as the augmentable `AppDeps` global interface, enabling cross-module forward references). `TBuilt` is always inferred from the chained `.add()` calls.
 - `preloader.ts` — `Preloader` class + `topologicalLevels()` (Kahn's BFS). Depends on `IResolver`.
 - `disposer.ts` — `Disposer` class. Reverse-order `onDestroy()`, resilient error collection. Depends on `IResolver`.
 - `introspection.ts` — `Introspection` class. `inspect()`/`describe()`/`health()`/`toString()`. Depends on `IResolver`.
@@ -98,7 +98,7 @@ Exported:
 - `container()`, `ContainerBuilder`, `defineModule` (application)
 - All 7 error classes + 2 warning types (domain)
 - `OnInit`, `OnDestroy` (domain, type-only)
-- `Container`, `IContainer`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions` (domain, type-only)
+- `AppDeps`, `Container`, `IContainer`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions` (domain, type-only)
 - `Module`, `InferModuleDeps`, `InferModuleBuilt` (application, type-only)
 - `detectDuplicateKeys` (domain)
 - `transient` (infrastructure)
@@ -112,7 +112,13 @@ Exported:
 4. Add tests through the public API
 
 ### Authoring a separate module
-Use `defineModule<TDeps>()(b => b.add(...))` — declare prerequisites locally, never import a global `AppDeps`-style interface. The `T extends { ... }` manual generic on a free function is an anti-pattern (verbose, couples to `AppDeps`, breaks inference). For modules without prerequisites, define them as a standalone `container().add(...)` builder and merge with `.merge(otherBuilder)` on the host.
+Three patterns, pick by ergonomic fit:
+
+1. **Local prereqs** — `defineModule<TDeps>()(b => b.add(...))`. Declare what the module **consumes** locally; output inferred from `.add()` chain. No global state. Best when prereqs are a small, fixed surface.
+2. **Global cross-ref** — `defineModule()(b => b.add(...))` + `declare module 'inwire' { interface AppDeps { … } }` per file. Each module declares what it **provides**; `c` is typed as the merged `AppDeps`. Enables forward references across modules regardless of declaration order.
+3. **Standalone builder + merge** — for modules with no prereqs, define as a plain `container().add(...)` builder and fuse with `.merge(otherBuilder)` on the host.
+
+Anti-pattern: the legacy `function fooModule<T extends { ... }>(b: ContainerBuilder<AppDeps, T>)` free-function generic. Verbose, couples to a global `AppDeps`, breaks inference. Use any of the three patterns above instead.
 
 ### Adding a new error type
 1. Create class extending `ContainerError` in `domain/errors.ts` with `hint` and `details`
