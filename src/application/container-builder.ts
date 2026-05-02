@@ -8,6 +8,13 @@ import { transient as markTransient } from '../infrastructure/transient.js';
 import { buildContainerProxy } from './container-proxy.js';
 
 /**
+ * `T` with the keys of `U` overridden by `U` (no duplicate-key intersection).
+ * Required to avoid `A & A → never` when classes have private members and the
+ * same key is declared in both `T` and `U` (e.g. global AppDeps + module add).
+ */
+type Override<T, U> = Omit<T, keyof U> & U;
+
+/**
  * Fluent builder that constructs a typed DI container incrementally.
  *
  * Two modes, one class:
@@ -38,14 +45,14 @@ export class ContainerBuilder<
       | ((c: TBuilt) => V)
       // biome-ignore lint/complexity/noBannedTypes: Function is the correct type-level discriminator for factory vs instance
       | (V & (V extends Function ? never : V)),
-  ): ContainerBuilder<TContract, TBuilt & Record<K, V>> {
+  ): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>> {
     this.validateKey(key);
     if (typeof factoryOrInstance === 'function') {
       this.factories.set(key, factoryOrInstance as Factory);
     } else {
       this.factories.set(key, () => factoryOrInstance);
     }
-    return this as unknown as ContainerBuilder<TContract, TBuilt & Record<K, V>>;
+    return this as unknown as ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>;
   }
 
   /**
@@ -54,21 +61,34 @@ export class ContainerBuilder<
   addTransient<K extends string & keyof TContract, V extends TContract[K]>(
     key: K & (K extends (typeof RESERVED_KEYS)[number] ? never : K),
     factory: (c: TBuilt) => V,
-  ): ContainerBuilder<TContract, TBuilt & Record<K, V>> {
+  ): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>> {
     this.validateKey(key);
     this.factories.set(key, markTransient(factory as Factory));
-    return this as unknown as ContainerBuilder<TContract, TBuilt & Record<K, V>>;
+    return this as unknown as ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>;
   }
 
   /**
    * Applies a module — a function that chains `.add()` calls on this builder.
-   * `c` in the module's factories is fully typed with all previously registered deps.
+   *
+   * `TDepsM` (the module's expected prereqs) is inferred independently from the
+   * builder's current `TBuilt`. Prereq satisfaction is NOT enforced at the type
+   * level on purpose: in global mode (`defineModule()` typed against `AppDeps`)
+   * the prereq surface is the full app, never the partial builder state. The
+   * runtime guarantees correctness via `ProviderNotFoundError` if a key is
+   * missing at resolution time.
    */
-  // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-  addModule<TNew extends Record<string, any>>(
-    module: (builder: ContainerBuilder<TContract, TBuilt>) => ContainerBuilder<TContract, TNew>,
-  ): ContainerBuilder<TContract, TBuilt & TNew> {
-    return module(this) as unknown as ContainerBuilder<TContract, TBuilt & TNew>;
+  addModule<
+    // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+    TDepsM extends Record<string, any>,
+    // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
+    TNew extends Record<string, any>,
+  >(
+    module: (builder: ContainerBuilder<TContract, TDepsM>) => ContainerBuilder<TContract, TNew>,
+  ): ContainerBuilder<TContract, Override<TBuilt, TNew>> {
+    return module(this as unknown as ContainerBuilder<TContract, TDepsM>) as unknown as ContainerBuilder<
+      TContract,
+      Override<TBuilt, TNew>
+    >;
   }
 
   /**
@@ -87,12 +107,12 @@ export class ContainerBuilder<
    */
   merge<TOther extends Record<string, unknown>>(
     other: ContainerBuilder<Record<string, unknown>, TOther>,
-  ): ContainerBuilder<TContract, TBuilt & TOther> {
+  ): ContainerBuilder<TContract, Override<TBuilt, TOther>> {
     for (const [key, factory] of Object.entries(other._toRecord())) {
       this.validateKey(key);
       this.factories.set(key, factory);
     }
-    return this as unknown as ContainerBuilder<TContract, TBuilt & TOther>;
+    return this as unknown as ContainerBuilder<TContract, Override<TBuilt, TOther>>;
   }
 
   /**

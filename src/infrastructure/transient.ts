@@ -1,5 +1,3 @@
-import type { Factory } from '../domain/types.js';
-
 /**
  * Symbol used to mark a factory as transient.
  * Transient factories create a new instance on every access.
@@ -9,8 +7,8 @@ export const TRANSIENT_MARKER = Symbol.for('inwire:transient');
 /**
  * A factory wrapper that marks it as transient.
  */
-export interface TransientFactory<T = unknown> {
-  (container: unknown): T;
+export interface TransientFactory<T = unknown, C = unknown> {
+  (container: C): T;
   [TRANSIENT_MARKER]: true;
 }
 
@@ -31,8 +29,8 @@ export interface TransientFactory<T = unknown> {
  * app.requestId; // 'def-456' (different!)
  * ```
  */
-export function transient<T>(factory: Factory<T>): Factory<T> {
-  const wrapper = ((container: unknown) => factory(container)) as TransientFactory<T>;
+export function transient<T, C = unknown>(factory: (container: C) => T): (container: C) => T {
+  const wrapper = ((container: C) => factory(container)) as TransientFactory<T, C>;
   wrapper[TRANSIENT_MARKER] = true;
   return wrapper;
 }
