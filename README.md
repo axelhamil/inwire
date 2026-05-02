@@ -218,46 +218,84 @@ extended.db;     // new dependency
 
 ### Modules
 
-A module is a function `(builder) => builder` that chains `.add()` calls. `c` is fully typed in every factory.
+Split a large container into reusable modules. Each module declares its prerequisites locally — no shared `AppDeps` interface, no manual generics.
 
-#### Pre-build: `addModule()` on the builder
+#### `defineModule()` — recommended pattern
+
+`defineModule<Prerequisites>()(builder => builder.add(...))` infers the module's output from the chained `.add()` calls. Prerequisites are explicit and local to the module file.
 
 ```typescript
-import { container, ContainerBuilder } from 'inwire';
+import { container, defineModule } from 'inwire';
 
-function dbModule<T extends { config: { dbUrl: string }; logger: Logger }>(
-  b: ContainerBuilder<Record<string, unknown>, T>,
-) {
-  return b
-    .add('db', (c) => new Database(c.config.dbUrl))
-    .add('cache', (c) => new Redis(c.config.dbUrl));
-}
+interface Logger { log: (msg: string) => void }
+
+const dbModule = defineModule<{ logger: Logger }>()((b) =>
+  b
+    .add('db', (c) => new Database(c.logger))
+    .add('cache', (c) => new Redis(c.logger)),
+);
+
+const userModule = defineModule<{ db: Database; logger: Logger }>()((b) =>
+  b.add('userService', (c) => new UserService(c.db, c.logger)),
+);
 
 const app = container()
-  .add('config', { dbUrl: 'postgres://...', port: 3000 })
-  .add('logger', () => new Logger())
+  .add('logger', (): Logger => new ConsoleLogger())
   .addModule(dbModule)
+  .addModule(userModule)
   .build();
+```
+
+Why this works:
+- Each module declares only what it **needs** — no import of a global `AppDeps` interface.
+- The output type is inferred from the `.add()` chain — no duplicated signatures.
+- Order of `addModule()` is enforced at compile time: applying `userModule` before `dbModule` would fail the prerequisite check.
+
+#### `.merge()` — fuse standalone builders
+
+When a module has no prerequisites (or just bundles independent bindings), define it as a standalone builder and merge it:
+
+```typescript
+const dbModule = container()
+  .add('db', () => new Database())
+  .add('cache', (c) => new Redis(c.db));
+
+const app = container()
+  .add('logger', () => new Logger())
+  .merge(dbModule)
+  .add('api', (c) => new Api(c.db, c.logger))
+  .build();
+```
+
+`.merge()` copies factories into the host builder. Cross-builder dependencies are resolved at build time. Duplicate keys override (last write wins). Reserved keys throw.
+
+#### Anti-pattern (avoid)
+
+Older code may show this manual generic pattern — it works but is verbose, couples the module to a global `AppDeps`, and forces you to redeclare every prerequisite by hand:
+
+```typescript
+// Don't do this anymore — use defineModule() instead.
+function dbModule<T extends { logger: Logger }>(
+  b: ContainerBuilder<AppDeps, T>,
+) {
+  return b.add('db', (c) => new Database(c.logger));
+}
 ```
 
 #### Post-build: `module()` on the container
 
-Compose modules after `.build()` — same DX, applied to an existing container:
+Compose post-build using the same builder DX:
 
 ```typescript
-const core = container()
-  .add('config', { dbUrl: 'postgres://...' })
-  .add('logger', () => new Logger())
-  .build();
+const core = container().add('logger', () => new Logger()).build();
 
-const withDb = core.module((b) => b
-  .add('db', (c) => new Database(c.config.dbUrl))
-  .add('cache', (c) => new Redis(c.config.dbUrl))
+const withDb = core.module((b) =>
+  b.add('db', (c) => new Database(c.logger)),
 );
 
-// Chainable
-const full = withDb.module((b) => b
-  .add('userService', (c) => new UserService(c.db, c.logger))
+// Chainable — c accumulates previous bindings
+const full = withDb.module((b) =>
+  b.add('userService', (c) => new UserService(c.db, c.logger)),
 );
 ```
 
@@ -388,6 +426,7 @@ Compatible with [Context7](https://context7.com/) and any tool that supports the
 | Export | Description |
 |---|---|
 | `container<T?>()` | Creates a new `ContainerBuilder`. Pass interface `T` for contract mode. |
+| `defineModule<Deps>()(fn)` | Creates a typed, reusable module with locally-declared prerequisites |
 | `transient(factory)` | Marks a factory as transient (for scope/extend) |
 | `detectDuplicateKeys(...modules)` | Pre-spread validation — detects duplicate keys |
 
@@ -397,7 +436,8 @@ Compatible with [Context7](https://context7.com/) and any tool that supports the
 |---|---|
 | `.add(key, factory)` | Register a dependency (factory or instance) |
 | `.addTransient(key, factory)` | Register a transient dependency |
-| `.addModule(module)` | Apply a module `(builder) => builder` |
+| `.addModule(module)` | Apply a module `(builder) => builder` (use with `defineModule()`) |
+| `.merge(otherBuilder)` | Merge a standalone builder's factories into this one |
 | `.build()` | Build and return the container |
 
 ### Container Methods
@@ -421,6 +461,9 @@ Compatible with [Context7](https://context7.com/) and any tool that supports the
 | `Container<T>` | Full container type (resolved deps + methods) |
 | `ContainerBuilder<TContract, TBuilt>` | Fluent builder class (also used in `module()` callbacks) |
 | `IContainer<T>` | Container methods interface |
+| `Module<TDeps, TBuilt>` | Type of a reusable module (returned by `defineModule()`) |
+| `InferModuleDeps<M>` / `InferModuleBuilt<M>` | Extract a module's prerequisites or full output type |
+| `Factory<T>` | Function type for raw factories (`(c: unknown) => T`) |
 | `OnInit` | Interface with `onInit(): void \| Promise<void>` |
 | `OnDestroy` | Interface with `onDestroy(): void \| Promise<void>` |
 | `ContainerGraph` | Return type of `inspect()` |

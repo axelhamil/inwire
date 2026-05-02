@@ -2,26 +2,38 @@
  * Example 04 — Modules
  *
  * Showcases:
- * - addModule() for typed module composition on the builder (pre-build)
- * - module() for typed module composition on the container (post-build)
- * - Reusable modules as functions, c fully typed in every factory
+ * - defineModule(): typed, reusable modules with locally-declared prerequisites (no shared AppDeps)
+ * - addModule(): apply a defineModule on the builder, prerequisites enforced at compile time
+ * - .merge(): fuse a standalone builder into another (for modules without prerequisites)
+ * - container.module() (post-build): same DX, applied to a built container
  */
-import { type ContainerBuilder, container } from '../src/index.js';
+import { container, defineModule } from '../src/index.js';
 
-// ── Module definitions ──────────────────────────────────────────────────────
-// A module is a function (builder) => builder that chains .add() calls.
-// c in every factory is fully typed — same as inline .add().
+// ── Types shared across modules ─────────────────────────────────────────────
 
-function dbModule<T extends { config: { dbUrl: string }; logger: { log: (msg: string) => void } }>(
-  b: ContainerBuilder<Record<string, unknown>, T>,
-) {
-  return b
-    .add('db', (c) => ({
-      query(sql: string) {
-        c.logger.log(`[db] ${sql}`);
-        return `result: ${sql}`;
-      },
-    }))
+interface Logger {
+  log: (msg: string) => void;
+}
+
+interface DB {
+  query: (sql: string) => string;
+}
+
+// ── defineModule() — modules with prerequisites ─────────────────────────────
+// Prerequisites are declared LOCALLY. No import of a global AppDeps.
+// The output type is INFERRED from the .add() chain.
+
+const dbModule = defineModule<{ config: { dbUrl: string }; logger: Logger }>()((b) =>
+  b
+    .add(
+      'db',
+      (c): DB => ({
+        query(sql) {
+          c.logger.log(`[db ${c.config.dbUrl}] ${sql}`);
+          return `result: ${sql}`;
+        },
+      }),
+    )
     .add('cache', (c) => {
       const store = new Map<string, string>();
       return {
@@ -31,13 +43,11 @@ function dbModule<T extends { config: { dbUrl: string }; logger: { log: (msg: st
           c.logger.log(`[cache] set ${key}`);
         },
       };
-    });
-}
+    }),
+);
 
-function authModule<T extends { logger: { log: (msg: string) => void } }>(
-  b: ContainerBuilder<Record<string, unknown>, T>,
-) {
-  return b
+const authModule = defineModule<{ logger: Logger }>()((b) =>
+  b
     .add('tokenService', () => ({
       verify: (token: string) => token === 'valid-token',
       sign: (userId: string) => `token-${userId}`,
@@ -48,16 +58,11 @@ function authModule<T extends { logger: { log: (msg: string) => void } }>(
         c.logger.log(`[auth] ${ok ? 'granted' : 'denied'}`);
         return ok;
       },
-    }));
-}
+    })),
+);
 
-function userModule<
-  T extends {
-    db: { query: (sql: string) => string };
-    logger: { log: (msg: string) => void };
-  },
->(b: ContainerBuilder<Record<string, unknown>, T>) {
-  return b
+const userModule = defineModule<{ db: DB; logger: Logger }>()((b) =>
+  b
     .add('userRepo', (c) => ({
       findById(id: string) {
         return c.db.query(`SELECT * FROM users WHERE id = '${id}'`);
@@ -68,22 +73,23 @@ function userModule<
         c.logger.log(`[user] getUser(${id})`);
         return c.userRepo.findById(id);
       },
-    }));
-}
+    })),
+);
 
-// ── Build with modules ──────────────────────────────────────────────────────
+// ── Build with addModule() — order is enforced by prerequisites ─────────────
 
 const app = container()
   .add('config', { appName: 'ModularApp', dbUrl: 'postgres://localhost', port: 3000 })
-  .add('logger', () => ({
-    log: (msg: string) => console.log(`  ${msg}`),
-  }))
+  .add(
+    'logger',
+    (): Logger => ({
+      log: (msg: string) => console.log(`  ${msg}`),
+    }),
+  )
   .addModule(dbModule)
   .addModule(authModule)
   .addModule(userModule)
   .build();
-
-// ── Use composed container ──────────────────────────────────────────────────
 
 console.log('=== Use services ===');
 app.authMiddleware.authenticate('valid-token');
@@ -93,53 +99,60 @@ console.log(`  result: ${result}`);
 app.cache.set('user:42', 'cached');
 console.log(`  cached: ${app.cache.get('user:42')}`);
 
-// ── Inline module (no separate function needed) ─────────────────────────────
+// ── .merge() — fuse a standalone builder ────────────────────────────────────
+// When a module has no external prerequisites, define it as a standalone
+// builder and merge it into the host. Cross-builder deps resolve at build time.
 
-console.log('\n=== Inline module ===');
+const metricsModule = container()
+  .add('counter', () => {
+    let value = 0;
+    return {
+      get value() {
+        return value;
+      },
+      inc: () => {
+        value++;
+      },
+    };
+  })
+  .add('metrics', (c) => ({
+    record(label: string) {
+      c.counter.inc();
+      console.log(`  [metrics] ${label} count=${c.counter.value}`);
+    },
+  }));
+
+console.log('\n=== Merge standalone module ===');
 const withMetrics = container()
-  .add('logger', () => ({ log: (msg: string) => console.log(`  ${msg}`) }))
-  .addModule((b) =>
-    b
-      .add('counter', () => ({
-        value: 0,
-        inc() {
-          this.value++;
-        },
-      }))
-      .add('metrics', (c) => ({
-        record() {
-          c.counter.inc();
-          c.logger.log(`[metrics] count=${c.counter.value}`);
-        },
-      })),
-  )
+  .add('logger', (): Logger => ({ log: (msg) => console.log(`  ${msg}`) }))
+  .merge(metricsModule)
   .build();
 
-withMetrics.metrics.record();
-withMetrics.metrics.record();
+withMetrics.metrics.record('event-a');
+withMetrics.metrics.record('event-b');
 
-// ── Post-build module() — compose after .build() ───────────────────────────
-// Same DX as addModule(), but on an existing container.
-// Internally: module() uses the builder for typed c, then delegates to extend().
+// ── Post-build: container.module() ──────────────────────────────────────────
+// Same DX on an already-built container.
 
 console.log('\n=== Post-build module() ===');
 
 const core = container()
   .add('config', { dbUrl: 'postgres://localhost' })
-  .add('logger', () => ({ log: (msg: string) => console.log(`  ${msg}`) }))
+  .add('logger', (): Logger => ({ log: (msg) => console.log(`  ${msg}`) }))
   .build();
 
-// db module — post-build, c is typed as core's deps
 const withDb = core.module((b) =>
-  b.add('db', (c) => ({
-    query: (sql: string) => {
-      c.logger.log(`[db] ${sql}`);
-      return `result: ${sql}`;
-    },
-  })),
+  b.add(
+    'db',
+    (c): DB => ({
+      query: (sql: string) => {
+        c.logger.log(`[db] ${sql}`);
+        return `result: ${sql}`;
+      },
+    }),
+  ),
 );
 
-// user module — chained, c accumulates previous module's deps
 const full = withDb.module((b) =>
   b.add('userService', (c) => ({
     getUser: (id: string) => {
