@@ -111,8 +111,8 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   module<TNew extends Record<string, any>>(
     fn: (
       builder: ContainerBuilder<Record<string, unknown>, T>,
-    ) => ContainerBuilder<Record<string, unknown>, TNew>,
-  ): Container<TNew>;
+    ) => ContainerBuilder<Record<string, unknown>, T & TNew>,
+  ): Container<T & TNew>;
 
   /**
    * Pre-resolves dependencies (warm-up).
