@@ -42,8 +42,9 @@ src/
 - `transient.ts` — `transient()` wrapper + `isTransient()` check. Uses `Symbol.for('inwire:transient')`.
 
 ### application/ (outermost)
-- `container-builder.ts` — `ContainerBuilder` fluent API + `container()` factory. Composition Root: instantiates Resolver with its collaborators.
+- `container-builder.ts` — `ContainerBuilder` fluent API (`.add`/`.addTransient`/`.addModule`/`.merge`/`.build`) + `container()` factory. Composition Root: instantiates Resolver with its collaborators.
 - `container-proxy.ts` — `buildContainerProxy()`. Creates the ES Proxy, dispatches to Preloader/Disposer/Introspection. Also a Composition Root (creates Resolvers for scope/extend).
+- `define-module.ts` — `defineModule<TDeps>()(fn)` helper + `Module<TDeps, TBuilt>`, `InferModuleDeps`, `InferModuleBuilt` types. Lets users build reusable modules without importing a global `AppDeps` interface; `TBuilt` is inferred from the chained `.add()` calls.
 - `preloader.ts` — `Preloader` class + `topologicalLevels()` (Kahn's BFS). Depends on `IResolver`.
 - `disposer.ts` — `Disposer` class. Reverse-order `onDestroy()`, resilient error collection. Depends on `IResolver`.
 - `introspection.ts` — `Introspection` class. `inspect()`/`describe()`/`health()`/`toString()`. Depends on `IResolver`.
@@ -94,10 +95,11 @@ src/
 The public API is defined in `src/index.ts`. Internal classes (`Resolver`, `CycleDetector`, `DependencyTracker`, `Preloader`, `Disposer`, `Introspection`) are NOT exported — they are implementation details.
 
 Exported:
-- `container()`, `ContainerBuilder` (application)
+- `container()`, `ContainerBuilder`, `defineModule` (application)
 - All 7 error classes + 2 warning types (domain)
 - `OnInit`, `OnDestroy` (domain, type-only)
-- `Container`, `IContainer`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions` (domain, type-only)
+- `Container`, `IContainer`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions` (domain, type-only)
+- `Module`, `InferModuleDeps`, `InferModuleBuilt` (application, type-only)
 - `detectDuplicateKeys` (domain)
 - `transient` (infrastructure)
 
@@ -108,6 +110,9 @@ Exported:
 2. Add the key to `RESERVED_KEYS` in `domain/types.ts`
 3. Implement in `container-proxy.ts` methods object (or extract a new use case class)
 4. Add tests through the public API
+
+### Authoring a separate module
+Use `defineModule<TDeps>()(b => b.add(...))` — declare prerequisites locally, never import a global `AppDeps`-style interface. The `T extends { ... }` manual generic on a free function is an anti-pattern (verbose, couples to `AppDeps`, breaks inference). For modules without prerequisites, define them as a standalone `container().add(...)` builder and merge with `.merge(otherBuilder)` on the host.
 
 ### Adding a new error type
 1. Create class extending `ContainerError` in `domain/errors.ts` with `hint` and `details`
