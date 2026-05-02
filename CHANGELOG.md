@@ -1,3 +1,16 @@
+# [2.2.0](https://github.com/axelhamil/inwire/compare/v2.1.7...v2.2.0) (2026-05-02)
+
+
+### Bug Fixes
+
+* **typing:** preserve T in IContainer.module() return type ([b86a62b](https://github.com/axelhamil/inwire/commit/b86a62bb84d1c8ca521eb710f32f8a501cc2f844))
+
+
+### Features
+
+* **api:** add defineModule helper and export Factory type ([f34b52c](https://github.com/axelhamil/inwire/commit/f34b52ca3ed0562b2d539fc014753a16567be6ea))
+* **builder:** add .merge() to fuse standalone builders ([08b3e99](https://github.com/axelhamil/inwire/commit/08b3e997dbaa1848dd61586ce652e0a860acdfdc))
+
 ## [2.1.7](https://github.com/axelhamil/inwire/compare/v2.1.6...v2.1.7) (2026-02-19)
 
 
