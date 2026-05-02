@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/axelhamil/inwire/compare/v2.2.0...v2.2.1) (2026-05-02)
+
+
+### Bug Fixes
+
+* **typing:** preserve accumulated TBuilt across chained addModule() ([fcc4820](https://github.com/axelhamil/inwire/commit/fcc4820f0b33344f1523facd85bd01c79c83ad28))
+
 # [2.2.0](https://github.com/axelhamil/inwire/compare/v2.1.7...v2.2.0) (2026-05-02)
 
 
