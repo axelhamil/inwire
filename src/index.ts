@@ -18,6 +18,12 @@
  */
 
 export { ContainerBuilder, container } from './application/container-builder.js';
+export type {
+  InferModuleBuilt,
+  InferModuleDeps,
+  Module,
+} from './application/define-module.js';
+export { defineModule } from './application/define-module.js';
 export {
   AsyncInitErrorWarning,
   CircularDependencyError,
@@ -35,6 +41,7 @@ export type {
   ContainerGraph,
   ContainerHealth,
   ContainerWarning,
+  Factory,
   IContainer,
   ProviderInfo,
   ScopeOptions,
