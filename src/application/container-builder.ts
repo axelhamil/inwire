@@ -85,10 +85,9 @@ export class ContainerBuilder<
   >(
     module: (builder: ContainerBuilder<TContract, TDepsM>) => ContainerBuilder<TContract, TNew>,
   ): ContainerBuilder<TContract, Override<TBuilt, TNew>> {
-    return module(this as unknown as ContainerBuilder<TContract, TDepsM>) as unknown as ContainerBuilder<
-      TContract,
-      Override<TBuilt, TNew>
-    >;
+    return module(
+      this as unknown as ContainerBuilder<TContract, TDepsM>,
+    ) as unknown as ContainerBuilder<TContract, Override<TBuilt, TNew>>;
   }
 
   /**
