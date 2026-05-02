@@ -1,3 +1,10 @@
+## [2.3.1](https://github.com/axelhamil/inwire/compare/v2.3.0...v2.3.1) (2026-05-02)
+
+
+### Bug Fixes
+
+* **typing:** addModule rejected non-empty AppDeps; .add() collapsed dup keys to never ([a52bcb1](https://github.com/axelhamil/inwire/commit/a52bcb1cbd927ce5b418374131c83f7fb20e0cbc))
+
 # [2.3.0](https://github.com/axelhamil/inwire/compare/v2.2.1...v2.3.0) (2026-05-02)
 
 
