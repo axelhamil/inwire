@@ -35,7 +35,7 @@ Each `.add()` accumulates the type — `c` in every factory knows about all prev
 
 ## Contract Mode (Interface-First)
 
-Pass an interface to the builder to constrain keys and return types at compile time:
+For monolithic containers (no modules), pass an interface to constrain keys and return types at compile time:
 
 ```typescript
 interface AppDeps {
@@ -53,7 +53,7 @@ const app = container<AppDeps>()
 app.ILogger; // typed as Logger (not ConsoleLogger)
 ```
 
-The string key acts as a token (like NestJS), but type-safe at compile time.
+The string key acts as a token (like NestJS), type-safe at compile time. For multi-module apps, prefer the **Pinia-style augmentation** pattern below — it scales better across files.
 
 ## Instance Values (Eager)
 
@@ -218,11 +218,77 @@ extended.db;     // new dependency
 
 ### Modules
 
-Split a large container into reusable modules. Each module declares its prerequisites locally — no shared `AppDeps` interface, no manual generics.
+Split a large container into reusable modules. inwire offers two complementary patterns — pick the one that fits the file you're writing.
 
-#### `defineModule()` — recommended pattern
+#### Pinia-style augmentation (recommended for multi-module apps)
 
-`defineModule<Prerequisites>()(builder => builder.add(...))` infers the module's output from the chained `.add()` calls. Prerequisites are explicit and local to the module file.
+Each module file augments the global `AppDeps` interface with the bindings **it provides**. `defineModule()` (no generic) types `c` as the merged `AppDeps`, so cross-module references resolve transparently regardless of declaration order:
+
+```typescript
+// modules/persistence.module.ts
+import { defineModule } from 'inwire';
+import type { IUserRepository } from '../contracts/IUserRepository';
+import { DrizzleUserRepository } from '../infrastructure/DrizzleUserRepository';
+
+declare module 'inwire' {
+  interface AppDeps {
+    IUserRepository: IUserRepository;
+  }
+}
+
+export const persistenceModule = defineModule()((b) =>
+  b.add('IUserRepository', (): IUserRepository => new DrizzleUserRepository()),
+);
+```
+
+```typescript
+// modules/auth.module.ts
+import { defineModule } from 'inwire';
+import type { IAuthProvider } from '../contracts/IAuthProvider';
+import { BetterAuthProvider } from '../infrastructure/BetterAuthProvider';
+import { SignInUseCase } from '../application/SignInUseCase';
+
+declare module 'inwire' {
+  interface AppDeps {
+    IAuthProvider: IAuthProvider;
+    SignInUseCase: SignInUseCase;
+  }
+}
+
+export const authModule = defineModule()((b) =>
+  b
+    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
+    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
+  //                                              ^^^^^^^^^^^^^^^^^^^^
+  //                       provided by persistenceModule — typed via merged AppDeps
+);
+```
+
+```typescript
+// container.ts
+import { container } from 'inwire';
+import { persistenceModule } from './modules/persistence.module';
+import { authModule } from './modules/auth.module';
+
+export const di = container()
+  .addModule(persistenceModule)
+  .addModule(authModule)
+  .build();
+
+export type Di = typeof di; // single source of truth, derived
+```
+
+Why this is the recommended default:
+- **Each module declares what it provides**, in its own file. The container file imports modules — that's it.
+- **Cross-module references work without ordering constraints.** `authModule` sees `IUserRepository` even if `persistenceModule` is added later (or in a sibling file).
+- **Mirrors Pinia's `PiniaCustomProperties` / Vue's `ComponentCustomProperties`.** Familiar pattern, zero runtime cost (augmentations erased after type-check).
+- **Derive the container shape with `type Di = typeof di`** — no hand-written interface to maintain.
+
+See [examples/06-pinia-augmentation.ts](examples/06-pinia-augmentation.ts) for a runnable walkthrough.
+
+#### `defineModule<TDeps>()` — locally-declared prerequisites
+
+When a module's prereqs are a small, fixed surface and you'd rather not augment a global, declare what the module **consumes** inline. `c` is typed locally as `TDeps`:
 
 ```typescript
 import { container, defineModule } from 'inwire';
@@ -246,10 +312,18 @@ const app = container()
   .build();
 ```
 
-Why this works:
-- Each module declares only what it **needs** — no import of a global `AppDeps` interface.
-- The output type is inferred from the `.add()` chain — no duplicated signatures.
-- `addModule()` does not enforce prereq satisfaction at the type level — `c.X` is typed via the module's `<TDeps>` (or the global `AppDeps`), and missing keys raise `ProviderNotFoundError` at resolution time. The trade-off: cross-module forward references and global-mode (`defineModule()` + `AppDeps`) work without ordering constraints.
+Trade-offs vs Pinia-style:
+
+| Pattern | You declare | Cross-module forward ref | Global state |
+|---|---|---|---|
+| `defineModule()` + `declare module` (Pinia) | what the module **provides** (outputs) | yes — order-independent | augments inwire's `AppDeps` |
+| `defineModule<TDeps>()` | what the module **consumes** (inputs) | no — prereqs must be added first | none — fully local |
+
+Both modes coexist: passing `<TDeps>` always overrides the global mode for that module. Mix freely.
+
+> **Why `defineModule<TDeps>()(fn)` and not `defineModule<TDeps>(fn)`?** TypeScript's generic inference is all-or-nothing — if you specify `<TDeps>` manually in a single-call signature, you'd be forced to write `<TBuilt>` by hand too, defeating the inference of the `.add()` chain. The curry splits the two: the first `()` fixes `TDeps` (or defaults to `AppDeps`), the second `(fn)` lets TS infer `TBuilt` from the factory's return. Same workaround used by zod, TanStack Query, RTK. Tracking [microsoft/TypeScript#26242](https://github.com/microsoft/TypeScript/issues/26242).
+
+> `addModule()` does not enforce prereq satisfaction at the type level — missing keys raise `ProviderNotFoundError` at resolution time. This relaxation is what makes Pinia-style forward references possible.
 
 #### `.merge()` — fuse standalone builders
 
@@ -268,19 +342,6 @@ const app = container()
 ```
 
 `.merge()` copies factories into the host builder. Cross-builder dependencies are resolved at build time. Duplicate keys override (last write wins). Reserved keys throw.
-
-#### Anti-pattern (avoid)
-
-Older code may show this manual generic pattern — it works but is verbose, couples the module to a global `AppDeps`, and forces you to redeclare every prerequisite by hand:
-
-```typescript
-// Don't do this anymore — use defineModule() instead.
-function dbModule<T extends { logger: Logger }>(
-  b: ContainerBuilder<AppDeps, T>,
-) {
-  return b.add('db', (c) => new Database(c.logger));
-}
-```
 
 #### Post-build: `module()` on the container
 
@@ -303,98 +364,38 @@ const full = withDb.module((b) =>
 
 #### Deriving the container shape (Zod-style)
 
-You don't need to maintain a manual interface for the container's full shape. Derive it from the container itself, exactly like `z.infer<typeof schema>`:
+You don't need a hand-written interface for the container's full shape. Derive it from the container itself, exactly like `z.infer<typeof schema>`:
 
 ```typescript
-// container.ts
-import { container } from 'inwire';
-import { authModule } from './modules/auth.module';
-import { billingModule } from './modules/billing.module';
-import { persistenceModule } from './modules/persistence.module';
-
 export const di = container()
   .addModule(persistenceModule)
   .addModule(authModule)
   .addModule(billingModule)
   .build();
 
-// Single source of truth — derived, never written by hand.
-// Use this as the type for handlers, controllers, etc.
+// Add a binding → Di grows. Remove one → it shrinks. Compiler does the bookkeeping.
 export type Di = typeof di;
-```
 
-> Note: `Di` is your own type alias, not the global `AppDeps` interface inwire exports for the Pinia-style pattern below. They serve different purposes — `Di` is consumed by your code; `AppDeps` augments inwire's typing.
-
-Each module declares only the contracts it consumes via `<TDeps>` — and those contracts are the **interfaces you already have** in `domain/` or `contracts/` (Clean Architecture, DDD):
-
-```typescript
-// modules/auth.module.ts
-import { defineModule } from 'inwire';
-import type { IUserRepository } from '../contracts/IUserRepository';
-import type { IAuthProvider } from '../contracts/IAuthProvider';
-import { BetterAuthProvider } from '../infrastructure/BetterAuthProvider';
-import { SignInUseCase } from '../application/SignInUseCase';
-
-export const authModule = defineModule<{ IUserRepository: IUserRepository }>()((b) =>
-  b
-    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
-    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
-);
-```
-
-Why this is the right pattern:
-- **No shape interface to maintain.** Add a binding anywhere → `Di` grows automatically. Remove one → it shrinks.
-- **No `declare module` augmentation.** No global state, no import side-effects.
-- **Local prerequisites.** A module's `<TDeps>` is its API contract — three lines max, exactly what it needs.
-- **Cross-module references work at build time.** When `authModule` registers `SignInUseCase` that needs `IUserRepository` (provided by `persistenceModule`), the prerequisite check at `addModule()` time enforces the order.
-
-See [examples/05-zod-style-typing.ts](examples/05-zod-style-typing.ts) for a full walk-through with three modules and a derived `Di`.
-
-#### Cross-module forward references (Pinia-style)
-
-When a module needs to consume a binding **provided by another module loaded later**, the local `<TDeps>` pattern can't help — the prerequisite would have to list everything the module sees, defeating the locality. For that case, inwire exposes an augmentable global interface, exactly like Pinia's `PiniaCustomProperties` or Vue's `ComponentCustomProperties`:
-
-```typescript
-import 'inwire';
-
-declare module 'inwire' {
-  interface AppDeps {
-    IUserRepository: IUserRepository;
-    SignInUseCase: SignInUseCase;
-  }
+// Use Di as the consumer-facing type (handlers, controllers, route definitions).
+async function getUser(deps: Di, id: string) {
+  return deps.IUserRepository.findById(id);
 }
 ```
 
-Each module file augments `AppDeps` with the bindings **it provides**. When you call `defineModule()` *without* a `<TDeps>` generic, `c` is typed as the global `AppDeps` — so `c.X` resolves transparently across modules, regardless of declaration order:
+> `Di` is your own type alias, distinct from the global `AppDeps` interface. They serve different purposes — `Di` is what your code consumes; `AppDeps` is the augmentation surface inwire types factories against.
+
+#### Anti-pattern (avoid)
+
+Older code may show this manual generic pattern — it works but is verbose, couples the module to a global `AppDeps`, and forces you to redeclare every prerequisite by hand:
 
 ```typescript
-// modules/auth.module.ts
-declare module 'inwire' {
-  interface AppDeps {
-    IAuthProvider: IAuthProvider;
-    SignInUseCase: SignInUseCase;
-  }
+// Don't do this anymore — use defineModule() instead.
+function dbModule<T extends { logger: Logger }>(
+  b: ContainerBuilder<AppDeps, T>,
+) {
+  return b.add('db', (c) => new Database(c.logger));
 }
-
-export const authModule = defineModule()((b) =>
-  b
-    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
-    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
-  //                                              ^^^^^^^^^^^^^^^^^^^^
-  //                       provided by another module — type-checked via AppDeps
-);
 ```
-
-Trade-off vs `defineModule<TDeps>()`:
-
-| Pattern | You declare | Cross-module forward ref |
-|---|---|---|
-| `defineModule<TDeps>()` | what the module **consumes** (inputs) | no — must be already added |
-| `defineModule()` + `declare module` | what the module **adds** (outputs) | yes — order-independent |
-
-Both patterns coexist. Mix freely — the explicit `<TDeps>` always overrides the global mode for that module. Why two? Because not every project needs the global augmentation, and not every module needs a tight prerequisite list. Pick the one that feels lighter for the file you're writing.
-
-See [examples/06-pinia-augmentation.ts](examples/06-pinia-augmentation.ts) for a full walk-through with two modules cross-referencing each other.
 
 ### Preload
 
@@ -473,12 +474,12 @@ detectDuplicateKeys(authModule, userModule);
 
 | Example | Run | Showcases |
 |---|---|---|
-| [01-web-service.ts](examples/01-web-service.ts) | `npm run example:web` | Contract mode, lifecycle, dependency inversion, scope, introspection |
-| [02-modular-testing.ts](examples/02-modular-testing.ts) | `npm run example:test` | Free mode, instance values, test overrides, extend + transient |
+| [06-pinia-augmentation.ts](examples/06-pinia-augmentation.ts) ★ | `npm run example:pinia` | **Recommended modular pattern.** `declare module 'inwire'` per file, order-independent cross-module typing |
+| [05-zod-style-typing.ts](examples/05-zod-style-typing.ts) | `npm run example:typing` | `type Di = typeof di` pattern, Clean Arch contracts, no manual shape interface |
+| [04-modules.ts](examples/04-modules.ts) | `npm run example:modules` | `defineModule<TDeps>()` local prereqs, `addModule`, `module()` post-build, `.merge()` |
 | [03-plugin-system.ts](examples/03-plugin-system.ts) | `npm run example:plugin` | Extend chain, scoped jobs, health, JSON graph for LLM |
-| [04-modules.ts](examples/04-modules.ts) | `npm run example:modules` | addModule, module() post-build, typed reusable modules |
-| [05-zod-style-typing.ts](examples/05-zod-style-typing.ts) | `npm run example:typing` | `type AppDeps = typeof di` pattern, Clean Arch contracts, no manual interface |
-| [06-pinia-augmentation.ts](examples/06-pinia-augmentation.ts) | `npm run example:pinia` | Cross-module forward references via `declare module 'inwire'`, order-independent typing |
+| [02-modular-testing.ts](examples/02-modular-testing.ts) | `npm run example:test` | Free mode, instance values, test overrides, extend + transient |
+| [01-web-service.ts](examples/01-web-service.ts) | `npm run example:web` | Contract mode (`container<AppDeps>()`), lifecycle, dependency inversion, scope, introspection |
 
 ## Architecture
 

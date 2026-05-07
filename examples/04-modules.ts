@@ -1,9 +1,17 @@
 /**
- * Example 04 — Modules
+ * Example 04 — Modules with `defineModule<TDeps>()` (local prereqs)
+ *
+ * This example shows the LOCAL prereqs mode: each module declares the
+ * interfaces it consumes inline via `<TDeps>`. No global augmentation,
+ * no cross-module forward references — prereqs must be added before
+ * the module that consumes them.
+ *
+ * For the recommended modular pattern (Pinia-style global augmentation
+ * with order-independent forward references), see example 06.
  *
  * Showcases:
- * - defineModule(): typed, reusable modules with locally-declared prerequisites (no shared AppDeps)
- * - addModule(): apply a defineModule on the builder, prerequisites enforced at compile time
+ * - defineModule<TDeps>(): typed, reusable modules with locally-declared prerequisites
+ * - addModule(): apply a defineModule on the builder
  * - .merge(): fuse a standalone builder into another (for modules without prerequisites)
  * - container.module() (post-build): same DX, applied to a built container
  */

@@ -217,11 +217,54 @@ function defineModule<TDeps extends Record<string, any> = AppDeps>(): <TBuilt>(
 ) => Module<TDeps, TBuilt>
 ```
 
-Defines a reusable, strongly-typed module. Two modes pick by whether you pass `<TDeps>` explicitly:
+Defines a reusable, strongly-typed module. Two modes pick by whether you pass `<TDeps>` explicitly. **Pinia-style (no generic) is the recommended default for multi-module apps** because it enables order-independent cross-module forward references.
+
+### Pinia-style — `defineModule()` (no generic) — RECOMMENDED for multi-module apps
+
+`c` is typed as `AppDeps`, the augmentable global interface. Each module file augments `AppDeps` with the bindings **it provides** via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript merges declarations across files, so `c.X` resolves transparently across modules — even when `X` is added by another module loaded later. **Cross-module forward references work, regardless of `addModule()` order.**
+
+```typescript
+// modules/persistence.module.ts
+declare module 'inwire' {
+  interface AppDeps {
+    IUserRepository: IUserRepository;
+  }
+}
+
+export const persistenceModule = defineModule()((b) =>
+  b.add('IUserRepository', (): IUserRepository => new DrizzleUserRepository()),
+);
+
+// modules/auth.module.ts
+declare module 'inwire' {
+  interface AppDeps {
+    IAuthProvider: IAuthProvider;
+    SignInUseCase: SignInUseCase;
+  }
+}
+
+export const authModule = defineModule()((b) =>
+  b
+    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
+    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
+  //                                              ^^^^^^^^^^^^^^^^^^^^
+  //                       provided by persistenceModule — typed via merged AppDeps
+);
+
+// container.ts
+export const di = container()
+  .addModule(persistenceModule)
+  .addModule(authModule)
+  .build();
+
+export type Di = typeof di; // single source of truth
+```
+
+This mirrors Pinia's `PiniaCustomProperties` and Vue's `ComponentCustomProperties`. Augmentations are erased after type-check — zero runtime cost.
 
 ### Local mode — `defineModule<TDeps>()`
 
-`c` in the module's factories is typed as `TDeps`, declared inline. The module's prerequisites are listed locally — no global state, no cross-file coupling. Best when prereqs are a small, fixed surface.
+`c` in the module's factories is typed as `TDeps`, declared inline. The module's prerequisites are listed locally — no global state, no cross-file coupling. Best when prereqs are a small, fixed surface and you'd rather avoid the global augmentation.
 
 ```typescript
 const billingModule = defineModule<{ eventBus: EventBus }>()((b) =>
@@ -236,36 +279,23 @@ const app = container()
 
 The output type is **inferred** from the chained `.add()` calls — no manual signature.
 
-### Global mode — `defineModule()` (no generic)
-
-`c` is typed as `AppDeps`, the augmentable global interface. Each module file augments `AppDeps` with the bindings **it provides** via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript merges declarations across files, so `c.X` resolves transparently across modules — even when `X` is added by another module loaded later. **Cross-module forward references work, regardless of `addModule()` order.**
-
-```typescript
-// modules/auth.module.ts
-declare module 'inwire' {
-  interface AppDeps {
-    IAuthProvider: IAuthProvider;
-    SignInUseCase: SignInUseCase;
-  }
-}
-
-export const authModule = defineModule()((b) =>
-  b
-    .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
-    .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
-  //                                              ^^^^^^^^^^^^^^^^^^^^
-  //                       provided by another module — typed via merged AppDeps
-);
-```
-
 ### Trade-off
 
-| Pattern | You declare | Cross-module forward ref |
-|---|---|---|
-| `defineModule<TDeps>()` | what the module **consumes** (inputs) | no |
-| `defineModule()` + `declare module` | what the module **adds** (outputs) | yes — order-independent |
+| Pattern | You declare | Cross-module forward ref | Global state |
+|---|---|---|---|
+| `defineModule()` + `declare module` (Pinia) | what the module **provides** (outputs) | yes — order-independent | augments `AppDeps` |
+| `defineModule<TDeps>()` (local) | what the module **consumes** (inputs) | no — prereqs added first | none |
 
 Both patterns coexist. Mix freely — passing `<TDeps>` always overrides the global mode for that module. `defineModule()` returns the same `Module<TDeps, TBuilt>` shape in both modes.
+
+### Why the double-call signature `defineModule<TDeps>()(fn)`?
+
+TypeScript's generic inference is all-or-nothing: specifying one type argument forces you to specify all of them. A flat single-call signature `defineModule<TDeps, TBuilt>(fn)` would force the consumer to write `TBuilt` by hand, defeating the inference of the `.add()` chain. The curry splits the two type parameters across two calls:
+
+- 1st call `defineModule<TDeps>()` — fixes `TDeps` manually (or falls back to the `AppDeps` default).
+- 2nd call `(fn)` — TS infers `TBuilt` from the chained `.add()` calls inside `fn`.
+
+This is the standard "partial type argument inference" workaround. Tracking issue: https://github.com/microsoft/TypeScript/issues/26242. Same pattern used by zod (`z.object()`), TanStack Query (`useQuery`), Redux Toolkit (`createSlice`).
 
 ### Type helpers
 

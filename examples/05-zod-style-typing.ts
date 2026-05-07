@@ -1,9 +1,14 @@
 /**
- * Example 05 — Zod-style type inference
+ * Example 05 — Zod-style type inference (`type Di = typeof di`)
  *
- * Pattern: `type Di = typeof di` — one source of truth, derived from the
- * container itself. No interface to keep in sync, no `declare module`
- * augmentation. Exactly like `z.infer<typeof schema>`.
+ * Pattern: derive the container's type from the container itself, exactly
+ * like `z.infer<typeof schema>`. No hand-written shape interface to maintain.
+ *
+ * This example uses `defineModule<TDeps>()` (local prereqs mode) for
+ * compactness, but the `type Di = typeof di` derivation works identically
+ * with the Pinia-style pattern (example 06) — and Pinia is the recommended
+ * choice for multi-module apps because it enables cross-module forward
+ * references. See example 06.
  *
  * Each module declares ONLY the contracts (interfaces) it consumes via
  * `defineModule<TDeps>()`. In a Clean Architecture / DDD codebase those

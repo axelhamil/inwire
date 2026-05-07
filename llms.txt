@@ -18,7 +18,9 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 ## Core API
 
 - `container<T?>()` — Creates a `ContainerBuilder`. Pass interface `T` for contract mode (constrains keys and return types).
-- `defineModule<TDeps?>()(fn)` — Defines a reusable, strongly-typed module. Without `<TDeps>`, `c` is typed as the global augmentable `AppDeps` interface (cross-module forward references). With `<TDeps>`, `c` is typed locally — the module declares its prerequisites inline.
+- `defineModule<TDeps?>()(fn)` — Defines a reusable, strongly-typed module. Two modes:
+  - **Pinia-style (recommended for multi-module apps)** — `defineModule()` (no generic). `c` is typed as the augmentable global `AppDeps` interface. Each module file augments `AppDeps` with what it PROVIDES via `declare module 'inwire' { interface AppDeps { … } }`. Cross-module forward references work, order-independent.
+  - **Local prereqs** — `defineModule<TDeps>()`. `c` is typed locally as `TDeps`. Module declares what it CONSUMES inline. No global state; no cross-module forward refs (prereqs must be added before).
 - `transient(factory)` — Marks a factory as transient for scope/extend (new instance on every access, no caching).
 - `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object.
 

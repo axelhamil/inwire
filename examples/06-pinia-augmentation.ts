@@ -1,5 +1,5 @@
 /**
- * Example 06 — Cross-module typing via interface augmentation (Pinia-style)
+ * Example 06 — Pinia-style augmentation ★ RECOMMENDED MODULAR PATTERN ★
  *
  * `defineModule()` (no `<TDeps>` generic) types `c` as the global `AppDeps`
  * interface. Each module file augments `AppDeps` with the bindings it provides
@@ -7,11 +7,17 @@
  * the declarations, so `c.X` resolves even when `X` is added by another module
  * loaded in any order.
  *
- * Trade-off vs `defineModule<TDeps>()`:
+ * Why this is the default for multi-module apps:
+ * - Each module file declares what it PROVIDES, in its own file. No shared shape interface.
+ * - Cross-module forward references work without ordering constraints.
+ * - Mirrors Pinia (`PiniaCustomProperties`) and Vue (`ComponentCustomProperties`).
+ * - Zero runtime cost — augmentations are erased after type-check.
+ *
+ * Trade-off vs `defineModule<TDeps>()` (see example 04):
  * - Pinia-style → declare what a module ADDS, get cross-ref for free.
  * - `<TDeps>` → declare what a module CONSUMES, no cross-ref but no augmentation.
  *
- * Pick whichever feels lighter. Mix is fine — `<TDeps>` overrides the global mode.
+ * Both modes coexist. Pick the one that feels lighter for the file you're writing.
  */
 import { container, defineModule } from '../src/index.js';
 

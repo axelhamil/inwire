@@ -34,6 +34,19 @@ export type Module<
  *
  * The output type is always **inferred** from the chained `.add()` calls.
  *
+ * ### Why the double-call signature `defineModule<TDeps>()(fn)`?
+ *
+ * TypeScript enforces an all-or-nothing rule on generic type arguments: if you
+ * specify one explicitly, you must specify them all. A single-call signature
+ * `defineModule<TDeps, TBuilt>(fn)` would force you to write `TBuilt` by hand,
+ * defeating the inference. The curry splits the two parameters across two calls:
+ *
+ * - 1st call `defineModule<TDeps>()` — fixes `TDeps` manually (or falls back to `AppDeps`).
+ * - 2nd call `(fn)` — `TBuilt` is inferred from the `.add()` chain in `fn`.
+ *
+ * Tracking issue: https://github.com/microsoft/TypeScript/issues/26242 (partial
+ * type argument inference). Same workaround used by zod, TanStack Query, RTK.
+ *
  * @example Global mode (Pinia-style):
  * ```typescript
  * declare module 'inwire' {
