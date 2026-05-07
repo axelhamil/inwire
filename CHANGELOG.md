@@ -1,3 +1,5 @@
+## [2.3.2](https://github.com/axelhamil/inwire/compare/v2.3.1...v2.3.2) (2026-05-07)
+
 ## [2.3.1](https://github.com/axelhamil/inwire/compare/v2.3.0...v2.3.1) (2026-05-02)
 
 
