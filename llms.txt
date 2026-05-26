@@ -11,7 +11,7 @@ Clean Architecture with enforced dependency rule: `domain/` has zero imports fro
 
 - **domain/** — Pure contracts: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator` interfaces; 7 error classes with `hint` + `details`; `OnInit`/`OnDestroy` lifecycle (duck-typed); validation + Levenshtein fuzzy matching.
 - **infrastructure/** — Concrete mechanisms: `Resolver` (lazy resolution, singleton cache, parent chain), `CycleDetector` (circular dep detection), `DependencyTracker` (tracking Proxy + dep graph builder), `transient()` marker.
-- **application/** — Use cases + orchestration: `ContainerBuilder` (fluent builder), `container-proxy` (Proxy construction, scope/extend/reset), `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection` (inspect/describe/health).
+- **application/** — Use cases + orchestration: `ContainerBuilder` (fluent builder), `container-proxy` (Proxy construction + dispatch), `Scoper` (builds child resolvers for `.scope()`), `Extender` (builds merged resolvers for `.extend()`), `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection` (inspect/describe/health). Four Composition Roots (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`) are the only files allowed to instantiate concrete infra.
 
 SOLID principles: each file has a single responsibility. The Resolver receives collaborators via constructor injection (DIP). Application layer depends on `IResolver` interface, not the concrete class.
 
@@ -43,12 +43,14 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 - `.describe(key)` — Returns `ProviderInfo` for a single provider.
 - `.health()` — Returns `ContainerHealth` with warnings (e.g. scope mismatches).
 - `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order. Resilient: collects all errors, throws `AggregateError` if multiple failures.
+- `[Symbol.asyncDispose]()` — Alias of `.dispose()`. Enables ES2023 `await using container = ...` for automatic disposal at scope exit (requires TS ≥ 5.2 and Node ≥ 20.4, Bun, or Deno).
 
 ## Types
 
 - `AppDeps` — Augmentable global interface. Empty by default. Augmented per module via `declare module 'inwire' { interface AppDeps { … } }` to enable cross-module forward references when using `defineModule()` without `<TDeps>`.
 - `Container<T>` — Resolved deps + container methods
-- `ContainerBuilder<TContract, TBuilt>` — Fluent builder class (also used in `module()` callbacks)
+- `ContainerBuilder<TContract, TBuilt>` — Fluent builder class
+- `IContainerBuilder<TContract, TBuilt>` — Domain-level builder interface (used in `module()` callbacks; `ContainerBuilder` implements it structurally)
 - `IContainer<T>` — Container methods interface
 - `Module<TDeps, TBuilt>` — Type of a module produced by `defineModule()`. `TDeps` are the prereqs, `TBuilt` is `TDeps` plus what the module adds.
 - `InferModuleDeps<M>` / `InferModuleBuilt<M>` — Type helpers to extract a module's prerequisites and full output.

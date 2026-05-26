@@ -1,17 +1,26 @@
-import type { Container, Factory, ScopeOptions } from '../domain/types.js';
+import type { Container, ScopeOptions } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
-import { CycleDetector } from '../infrastructure/cycle-detector.js';
-import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
-import { Resolver } from '../infrastructure/resolver.js';
+import type { Resolver } from '../infrastructure/resolver.js';
 import { Disposer } from './disposer.js';
+import { Extender } from './extender.js';
 import { Introspection } from './introspection.js';
 import { Preloader } from './preloader.js';
+import { Scoper } from './scoper.js';
 
 const validator = new Validator();
+const scoper = new Scoper(validator);
+const extender = new Extender(validator);
 
 /**
- * Builds the Proxy-based container from a Resolver.
- * Scope and extend are inlined here.
+ * Wraps a {@link Resolver} in the user-facing ES Proxy:
+ * - Property access → lazy resolution via `resolver.resolve(key)`.
+ * - Method names (`.scope`, `.extend`, `.module`, `.preload`, `.reset`,
+ *   `.inspect`, `.describe`, `.health`, `.dispose`, `Symbol.asyncDispose`)
+ *   → dispatched to the appropriate use case class.
+ *
+ * Resolver creation for `.scope()` / `.extend()` is delegated to
+ * {@link Scoper} / {@link Extender} (their own composition roots).
+ *
  * @internal
  */
 export function buildContainerProxy(
@@ -21,50 +30,13 @@ export function buildContainerProxy(
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
   const disposer = new Disposer(resolver);
-  const methods = {
-    /**
-     * Creates a child container with a parent-child chain.
-     * - Child gets its own cache; parent singletons are reused on cache miss (lookup walks up).
-     * - Overriding a key shadows the parent — the parent's cached instance is untouched.
-     * - Ideal for per-request / per-job isolation (e.g. requestId, traceId).
-     */
-    scope: (extra: Record<string, (c: unknown) => unknown>, options?: ScopeOptions) => {
-      validator.validateConfig(extra);
-      const childFactories = new Map<string, Factory>();
-      for (const [key, factory] of Object.entries(extra)) {
-        childFactories.set(key, factory as Factory);
-      }
-      const childResolver = new Resolver({
-        factories: childFactories,
-        parent: resolver,
-        name: options?.name,
-        cycleDetector: new CycleDetector(),
-        dependencyTracker: new DependencyTracker(),
-      });
-      return buildContainerProxy(childResolver, builderFactory);
-    },
 
-    /**
-     * Returns a new flat container with merged factories.
-     * - Existing singleton cache is snapshot-copied (shared instances, no parent chain).
-     * - New keys are added; duplicate keys override the original factory.
-     * - Ideal for plugins, feature modules, or test overrides.
-     */
-    extend: (extra: Record<string, (c: unknown) => unknown>) => {
-      validator.validateConfig(extra);
-      const merged = new Map(resolver.getFactories());
-      for (const [key, factory] of Object.entries(extra)) {
-        merged.set(key, factory as Factory);
-      }
-      const newResolver = new Resolver({
-        factories: merged,
-        cache: new Map(resolver.getCache()),
-        initCalled: resolver.getInitCalled(),
-        cycleDetector: new CycleDetector(),
-        dependencyTracker: new DependencyTracker(),
-      });
-      return buildContainerProxy(newResolver, builderFactory);
-    },
+  const methods = {
+    scope: (extra: Record<string, (c: unknown) => unknown>, options?: ScopeOptions) =>
+      buildContainerProxy(scoper.scope(resolver, extra, options), builderFactory),
+
+    extend: (extra: Record<string, (c: unknown) => unknown>) =>
+      buildContainerProxy(extender.extend(resolver, extra), builderFactory),
 
     module: (fn: (b: unknown) => unknown) => {
       if (!builderFactory) throw new Error('module() is not available');
@@ -105,6 +77,9 @@ export function buildContainerProxy(
         if (typeof prop === 'symbol') {
           if (prop === Symbol.toPrimitive || prop === Symbol.toStringTag) {
             return () => introspection.toString();
+          }
+          if (prop === Symbol.asyncDispose) {
+            return () => disposer.dispose();
           }
           return undefined;
         }

@@ -1,7 +1,7 @@
 {
   "name": "inwire",
   "version": "2.3.2",
-  "description": "Zero-ceremony dependency injection for TypeScript. Full inference, no decorators, no tokens. Built-in introspection for AI tooling.",
+  "description": "Type-safe dependency injection for TypeScript. Zero ceremony, full inference, no decorators, no tokens. ~4KB gzip, built-in introspection for AI tooling.",
   "type": "module",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -57,15 +57,15 @@
   "packageManager": "pnpm@10.26.0",
   "license": "MIT",
   "devDependencies": {
-    "@biomejs/biome": "^2.4.2",
+    "@biomejs/biome": "^2.4.15",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
-    "@vitest/coverage-v8": "^4.0.18",
-    "publint": "^0.3.17",
+    "@vitest/coverage-v8": "^4.1.7",
+    "publint": "^0.3.21",
     "semantic-release": "^25.0.3",
     "tsdown": "^0.20.3",
-    "tsx": "^4.21.0",
+    "tsx": "^4.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.7"
   }
 }

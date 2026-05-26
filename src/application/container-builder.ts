@@ -1,18 +1,20 @@
 import { ReservedKeyError } from '../domain/errors.js';
-import type { Container, Factory, RESERVED_KEYS } from '../domain/types.js';
+import type {
+  AddBuilt,
+  BuilderKey,
+  Container,
+  Factory,
+  FactoryOrInstance,
+  NonReservedKey,
+  Override,
+} from '../domain/types.js';
 import { RESERVED_KEYS as RESERVED } from '../domain/types.js';
+import { Validator } from '../domain/validation.js';
 import { CycleDetector } from '../infrastructure/cycle-detector.js';
 import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
 import { transient as markTransient } from '../infrastructure/transient.js';
 import { buildContainerProxy } from './container-proxy.js';
-
-/**
- * `T` with the keys of `U` overridden by `U` (no duplicate-key intersection).
- * Required to avoid `A & A → never` when classes have private members and the
- * same key is declared in both `T` and `U` (e.g. global AppDeps + module add).
- */
-type Override<T, U> = Omit<T, keyof U> & U;
 
 /**
  * Fluent builder that constructs a typed DI container incrementally.
@@ -39,32 +41,29 @@ export class ContainerBuilder<
    * Convention: `typeof value === 'function'` → factory. Otherwise → instance (wrapped in `() => value`).
    * To register a function as a value: `add('fn', () => myFunction)`.
    */
-  add<K extends string & keyof TContract, V extends TContract[K]>(
-    key: K & (K extends (typeof RESERVED_KEYS)[number] ? never : K),
-    factoryOrInstance:
-      | ((c: TBuilt) => V)
-      // biome-ignore lint/complexity/noBannedTypes: Function is the correct type-level discriminator for factory vs instance
-      | (V & (V extends Function ? never : V)),
-  ): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>> {
+  add<K extends BuilderKey<TContract>, V extends TContract[K]>(
+    key: NonReservedKey<K>,
+    factoryOrInstance: FactoryOrInstance<TBuilt, V>,
+  ): ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>> {
     this.validateKey(key);
     if (typeof factoryOrInstance === 'function') {
       this.factories.set(key, factoryOrInstance as Factory);
     } else {
       this.factories.set(key, () => factoryOrInstance);
     }
-    return this as unknown as ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>;
+    return this as unknown as ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
   }
 
   /**
    * Registers a transient dependency (new instance on every access).
    */
-  addTransient<K extends string & keyof TContract, V extends TContract[K]>(
-    key: K & (K extends (typeof RESERVED_KEYS)[number] ? never : K),
+  addTransient<K extends BuilderKey<TContract>, V extends TContract[K]>(
+    key: NonReservedKey<K>,
     factory: (c: TBuilt) => V,
-  ): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>> {
+  ): ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>> {
     this.validateKey(key);
     this.factories.set(key, markTransient(factory as Factory));
-    return this as unknown as ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>;
+    return this as unknown as ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
   }
 
   /**
@@ -130,6 +129,7 @@ export class ContainerBuilder<
       factories: new Map(this.factories),
       cycleDetector: new CycleDetector(),
       dependencyTracker: new DependencyTracker(),
+      validator: new Validator(),
     });
     return buildContainerProxy(resolver, () => new ContainerBuilder()) as Container<TBuilt>;
   }

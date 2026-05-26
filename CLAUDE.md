@@ -12,7 +12,7 @@ Cross-cutting rules. They apply everywhere; everything below is a consequence.
 - **Singleton by default, transient opt-in.** `transient()` stamps `Symbol.for('inwire:transient')` on the factory. **Why:** predictable lifecycle, explicit opt-out, marker survives realm/bundler duplication.
 - **Duck-typed lifecycle.** `onInit`/`onDestroy` are checked at runtime via `hasOnInit`/`hasOnDestroy`. **Why:** no base class, framework-agnostic, plain objects qualify.
 - **Constructor injection for collaborators.** `Resolver` receives `{ cycleDetector, dependencyTracker, ... }` via `ResolverDeps`. **Why:** application code depends on `IResolver`, not on concretes; swappable in tests.
-- **Composition Roots are sacred.** Only `application/container-builder.ts` and `application/container-proxy.ts` instantiate concrete infra (`Resolver`, `CycleDetector`, `DependencyTracker`). **Why:** dependency rule enforcement; everything else stays interface-only.
+- **Composition Roots are sacred.** Only `application/container-builder.ts`, `application/container-proxy.ts`, `application/scoper.ts`, and `application/extender.ts` instantiate concrete infra (`Resolver`, `CycleDetector`, `DependencyTracker`). **Why:** dependency rule enforcement; everything else stays interface-only.
 
 ## Commands
 
@@ -55,7 +55,7 @@ src/
 
 - Importing from `infrastructure/` or `application/` inside `domain/`.
 - Importing from `application/` inside `infrastructure/`.
-- Instantiating concrete infra classes (`Resolver`, `CycleDetector`, `DependencyTracker`) outside `container-builder.ts` or `container-proxy.ts`.
+- Instantiating concrete infra classes (`Resolver`, `CycleDetector`, `DependencyTracker`) outside the four Composition Roots (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`).
 - Defining values inline in `src/index.ts` — the barrel only re-exports.
 
 ## Layer rules
@@ -108,8 +108,10 @@ src/
 
 **What lives here:**
 
-- `container-builder.ts` — `ContainerBuilder` fluent API (`.add` / `.addTransient` / `.addModule` / `.merge` / `.build`) + `container()` factory. Composition Root: instantiates `Resolver` with its collaborators.
-- `container-proxy.ts` — `buildContainerProxy()`. Creates the ES Proxy, dispatches to `Preloader` / `Disposer` / `Introspection`. Also a Composition Root (creates resolvers for `.scope()` / `.extend()`).
+- `container-builder.ts` — `ContainerBuilder` fluent API (`.add` / `.addTransient` / `.addModule` / `.merge` / `.build`) + `container()` factory. Composition Root: instantiates `Resolver` with its collaborators for the initial build.
+- `container-proxy.ts` — `buildContainerProxy()`. Creates the ES Proxy and dispatches `.scope()` / `.extend()` / `.module()` / `.preload()` / `.reset()` / `.inspect()` / `.dispose()` / `Symbol.asyncDispose` to the appropriate use case class. Composition Root: instantiates `Scoper`, `Extender`, `Introspection`, `Preloader`, `Disposer`.
+- `scoper.ts` — `Scoper`. Builds child resolvers for `.scope()`. Composition Root.
+- `extender.ts` — `Extender`. Builds merged resolvers for `.extend()`. Composition Root.
 - `define-module.ts` — `defineModule<TDeps>()(fn)` helper + `Module<TDeps, TBuilt>`, `InferModuleDeps`, `InferModuleBuilt` types.
 - `preloader.ts` — `Preloader` + `topologicalLevels()` (Kahn's BFS). Depends on `IResolver`.
 - `disposer.ts` — `Disposer`. Reverse-order `onDestroy()`, resilient error collection. Depends on `IResolver`.
@@ -117,7 +119,7 @@ src/
 
 **Rules:**
 
-1. Two Composition Roots only: `container-builder.ts` (initial build) and `container-proxy.ts` (`.scope()` / `.extend()`). **Why:** concentrate concrete infra wiring; everything else depends on `IResolver`.
+1. Four Composition Roots only: `container-builder.ts` (initial build), `container-proxy.ts` (Proxy wrapping + dispatch), `scoper.ts` (`.scope()` child resolvers), `extender.ts` (`.extend()` merged resolvers). **Why:** concentrate concrete infra wiring; everything else depends on `IResolver`.
 2. Use cases (`Preloader`, `Disposer`, `Introspection`) depend on `IResolver` only. **Why:** swappable Resolver, testable with a fake, layer-pure.
 3. `defineModule` has two modes — pick by ergonomics, not by accident:
    - **Local:** `defineModule<TDeps>()(b => …)` — declares **consumed** prereqs locally, no global state.
@@ -219,7 +221,7 @@ Three patterns. Pick by the table below — never mix.
 
 A consolidated list — what NOT to do across the whole codebase.
 
-- Don't add a third Composition Root. The two existing ones (`container-builder.ts`, `container-proxy.ts`) cover initial build and scope/extend respectively.
+- Don't add a fifth Composition Root. The four existing ones (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`) cover initial build, Proxy dispatch, child scopes, and extended merges respectively.
 - Don't reintroduce decorators, tokens, or metadata-based DI. The whole library exists to avoid them.
 - Don't make singleton-vs-transient implicit — transient must be explicit via `transient()` or `.addTransient()`.
 - Don't catch errors silently. Wrap unknown errors in a `FactoryError` (or a new `ContainerError` subclass) and bubble up.

@@ -358,6 +358,42 @@ describe('lifecycle', () => {
     });
   });
 
+  describe('Symbol.asyncDispose (ES2023 await using)', () => {
+    it('dispose() is invoked via Symbol.asyncDispose', async () => {
+      const destroyed: string[] = [];
+      const c = container()
+        .add('db', () => ({
+          onDestroy() {
+            destroyed.push('db');
+          },
+        }))
+        .build();
+
+      c.db;
+      await c[Symbol.asyncDispose]();
+
+      expect(destroyed).toEqual(['db']);
+    });
+
+    it('supports `await using` for automatic disposal', async () => {
+      const destroyed: string[] = [];
+
+      const run = async () => {
+        await using request = container()
+          .add('handler', () => ({
+            onDestroy() {
+              destroyed.push('handler');
+            },
+          }))
+          .build();
+        request.handler;
+      };
+
+      await run();
+      expect(destroyed).toEqual(['handler']);
+    });
+  });
+
   describe('dispose idempotency', () => {
     it('double dispose is safe (onDestroy called once)', async () => {
       let destroyCount = 0;

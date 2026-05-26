@@ -8,8 +8,13 @@ import {
   UndefinedReturnError,
 } from '../domain/errors.js';
 import { hasOnInit } from '../domain/lifecycle.js';
-import type { Factory, ICycleDetector, IDependencyTracker, IResolver } from '../domain/types.js';
-import { Validator } from '../domain/validation.js';
+import type {
+  Factory,
+  ICycleDetector,
+  IDependencyTracker,
+  IResolver,
+  IValidator,
+} from '../domain/types.js';
 import { isTransient } from './transient.js';
 
 export interface ResolverDeps {
@@ -20,6 +25,7 @@ export interface ResolverDeps {
   initCalled?: Set<string>;
   cycleDetector: ICycleDetector;
   dependencyTracker: IDependencyTracker;
+  validator: IValidator;
 }
 
 /**
@@ -30,7 +36,7 @@ export class Resolver implements IResolver {
   private readonly factories: Map<string, Factory>;
   private readonly cache: Map<string, unknown>;
   private readonly warnings: AnyWarning[] = [];
-  private readonly validator = new Validator();
+  private readonly validator: IValidator;
   private readonly initCalled: Set<string>;
   private deferOnInit = false;
 
@@ -47,6 +53,7 @@ export class Resolver implements IResolver {
     this.initCalled = deps.initCalled ? new Set(deps.initCalled) : new Set();
     this.cycleDetector = deps.cycleDetector;
     this.dependencyTracker = deps.dependencyTracker;
+    this.validator = deps.validator;
   }
 
   getName(): string | undefined {
@@ -56,79 +63,117 @@ export class Resolver implements IResolver {
   resolve(key: string, chain: string[] = []): unknown {
     const factory = this.factories.get(key);
 
+    // Fast path: singleton cache hit.
     if (factory && !isTransient(factory) && this.cache.has(key)) {
       return this.cache.get(key);
     }
 
-    if (!factory) {
-      if (this.parent) {
-        return this.parent.resolve(key, chain);
-      }
-      const allKeys = this.getAllRegisteredKeys();
-      const suggestion = this.validator.suggestKey(key, allKeys);
-      throw new ProviderNotFoundError(key, chain, allKeys, suggestion);
-    }
+    // No local factory — walk parent chain or throw with fuzzy suggestion.
+    if (!factory) return this.delegateToParentOrThrow(key, chain);
 
+    // Circular dependency guard.
     if (this.cycleDetector.isResolving(key)) {
       throw new CircularDependencyError(key, [...chain]);
     }
 
+    // Resolution: run the factory + finalize the instance.
     this.cycleDetector.enter(key);
     const currentChain = [...chain, key];
-
     try {
-      const deps: string[] = [];
-      const trackingProxy = this.dependencyTracker.createTrackingProxy(
-        deps,
-        currentChain,
-        (depKey, depChain) => this.resolve(depKey, depChain),
-      );
-
-      const instance = factory(trackingProxy);
-
-      if (instance === undefined) {
-        throw new UndefinedReturnError(key, currentChain);
-      }
-
-      this.dependencyTracker.recordDeps(key, deps);
-
-      if (!isTransient(factory)) {
-        for (const dep of deps) {
-          const depFactory = this.getFactory(dep);
-          if (depFactory && isTransient(depFactory)) {
-            this.warnings.push(new ScopeMismatchWarning(key, dep));
-          }
-        }
-      }
-
-      if (!isTransient(factory)) {
-        this.cache.set(key, instance);
-      }
-
-      if (!this.deferOnInit && !this.initCalled.has(key) && hasOnInit(instance)) {
-        this.initCalled.add(key);
-        const initResult = instance.onInit();
-        if (initResult instanceof Promise) {
-          initResult.catch((error) => {
-            this.warnings.push(new AsyncInitErrorWarning(key, error));
-          });
-        }
-      }
-
+      const { instance, deps } = this.executeFactory(factory, currentChain);
+      this.finalizeInstance(key, factory, instance, deps);
       return instance;
     } catch (error) {
-      if (
-        error instanceof CircularDependencyError ||
-        error instanceof ProviderNotFoundError ||
-        error instanceof UndefinedReturnError ||
-        error instanceof FactoryError
-      ) {
-        throw error;
-      }
-      throw new FactoryError(key, currentChain, error);
+      throw this.classifyError(key, currentChain, error);
     } finally {
       this.cycleDetector.leave(key);
     }
+  }
+
+  /** Delegate to parent scope; throw `ProviderNotFoundError` at the root. */
+  private delegateToParentOrThrow(key: string, chain: string[]): unknown {
+    if (this.parent) return this.parent.resolve(key, chain);
+    const allKeys = this.getAllRegisteredKeys();
+    const suggestion = this.validator.suggestKey(key, allKeys);
+    throw new ProviderNotFoundError(key, chain, allKeys, suggestion);
+  }
+
+  /**
+   * Invokes the factory through a tracking Proxy that records every accessed
+   * dependency key — that's how the dependency graph is built automatically.
+   */
+  private executeFactory(
+    factory: Factory,
+    currentChain: string[],
+  ): { instance: unknown; deps: string[] } {
+    const deps: string[] = [];
+    const trackingProxy = this.dependencyTracker.createTrackingProxy(
+      deps,
+      currentChain,
+      (depKey, depChain) => this.resolve(depKey, depChain),
+    );
+    const instance = factory(trackingProxy);
+    if (instance === undefined) {
+      throw new UndefinedReturnError(currentChain.at(-1) ?? '', currentChain);
+    }
+    return { instance, deps };
+  }
+
+  /**
+   * Post-resolution bookkeeping: record deps, emit scope-mismatch warnings,
+   * populate the singleton cache, and dispatch `onInit()` (lazy mode only).
+   */
+  private finalizeInstance(key: string, factory: Factory, instance: unknown, deps: string[]): void {
+    this.dependencyTracker.recordDeps(key, deps);
+
+    if (!isTransient(factory)) {
+      this.detectScopeMismatch(key, deps);
+      this.cache.set(key, instance);
+    }
+
+    this.dispatchOnInitIfNeeded(key, instance);
+  }
+
+  /** Emit a warning when a singleton depends on a transient (almost always a bug). */
+  private detectScopeMismatch(singletonKey: string, deps: string[]): void {
+    for (const dep of deps) {
+      const depFactory = this.getFactory(dep);
+      if (depFactory && isTransient(depFactory)) {
+        this.warnings.push(new ScopeMismatchWarning(singletonKey, dep));
+      }
+    }
+  }
+
+  /**
+   * Fire `onInit()` once per key. Async rejections are captured as warnings —
+   * the lazy access path can't await, so users must call `preload()` to surface
+   * async init errors as proper exceptions.
+   */
+  private dispatchOnInitIfNeeded(key: string, instance: unknown): void {
+    if (this.deferOnInit || this.initCalled.has(key) || !hasOnInit(instance)) return;
+    this.initCalled.add(key);
+    const initResult = instance.onInit();
+    if (initResult instanceof Promise) {
+      initResult.catch((error) => {
+        this.warnings.push(new AsyncInitErrorWarning(key, error));
+      });
+    }
+  }
+
+  /**
+   * Preserve already-categorized container errors; wrap anything else as a
+   * `FactoryError` with the full resolution chain attached.
+   */
+  private classifyError(key: string, currentChain: string[], error: unknown): Error {
+    if (
+      error instanceof CircularDependencyError ||
+      error instanceof ProviderNotFoundError ||
+      error instanceof UndefinedReturnError ||
+      error instanceof FactoryError
+    ) {
+      return error;
+    }
+    return new FactoryError(key, currentChain, error);
   }
 
   isResolved(key: string): boolean {

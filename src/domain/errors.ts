@@ -27,11 +27,12 @@ export abstract class ContainerError extends Error {
 }
 
 /**
- * Thrown when a non-function value is passed in the deps definition.
+ * Thrown when a non-function value is passed in `scope()` or `extend()` deps.
+ * (`.add()` accepts non-function values as eager instances — see {@link ContainerBuilder.add}.)
  *
  * @example
  * ```typescript
- * container().add('apiKey', 'sk-123');
+ * app.scope({ apiKey: 'sk-123' });
  * // ContainerConfigError: 'apiKey' must be a factory function, got string.
  * // hint: "Wrap it: apiKey: () => 'sk-123'"
  * ```

@@ -1,6 +1,6 @@
 /**
- * inwire — AI-First dependency injection.
- * Zero ceremony, full TypeScript inference, no decorators, no tokens.
+ * inwire — Type-safe dependency injection for TypeScript.
+ * Zero ceremony, full inference, no decorators, no tokens. Built-in introspection for AI tooling.
  *
  * @example
  * ```typescript
@@ -44,6 +44,7 @@ export type {
   ContainerWarning,
   Factory,
   IContainer,
+  IContainerBuilder,
   ProviderInfo,
   ScopeOptions,
 } from './domain/types.js';

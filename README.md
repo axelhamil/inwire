@@ -220,6 +220,39 @@ await app.preload();              // everything
 
 Errors from `onInit()` propagate as a single `AggregateError` if multiple fail. Wrap in `try/catch` for startup validation.
 
+**Canonical boot sequence.** For any non-trivial app with async init (DB connections, queue workers, cache warmers), the recommended pattern is:
+
+```typescript
+// 1. Build the container — no I/O happens here, just factory registration.
+const app = container()
+  .add('config', () => loadConfig())
+  .add('db', (c) => new Database(c.config))         // implements OnInit (connect())
+  .add('cache', (c) => new Redis(c.config))         // implements OnInit (connect())
+  .add('queue', (c) => new QueueConsumer(c.db))     // implements OnInit (start consuming)
+  .build();
+
+// 2. Preload — runs onInit() in parallel where possible, surfaces errors.
+try {
+  await app.preload();
+} catch (err) {
+  console.error('Boot failed', err); // AggregateError if multiple onInit() rejected
+  process.exit(1);
+}
+
+// 3. Wire shutdown — LIFO onDestroy() in reverse resolution order.
+for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(sig, async () => {
+    await app.dispose();
+    process.exit(0);
+  });
+}
+
+// 4. App is ready.
+app.queue.start();
+```
+
+Without `preload()`, async `onInit()` errors are silently captured as `health().warnings` — fine for hot reloads, dangerous for production boot.
+
 ### Per-request scopes
 
 `scope()` creates a child container with extra bindings. The child inherits parent singletons via a parent-resolver chain; scoped bindings are isolated per scope.
@@ -239,7 +272,9 @@ request.logger;    // shared from parent
 
 ### Test overrides
 
-No special test API. Build a separate container with mocks:
+Two patterns — pick what fits your test:
+
+**From scratch** — build a parallel container with mocks:
 
 ```typescript
 function createTestContainer() {
@@ -250,6 +285,21 @@ function createTestContainer() {
     .build();
 }
 ```
+
+**From a real container** — override specific keys via `.extend()`:
+
+```typescript
+// production container is the source of truth
+const testApp = realApp.extend({
+  db: () => new InMemoryDatabase(),     // override
+  emailService: () => ({ send: vi.fn() }), // mock
+});
+
+// All other bindings (loggers, repos, services...) come from realApp untouched.
+testApp.users.signup({ email: 'a@b.c' });
+```
+
+`.extend()` shares the parent's singleton cache, so already-resolved real instances are reused. Overridden keys get fresh factories. This is the most ergonomic way to mock a slice of a real container without rebuilding the whole graph.
 
 ### Plugin system — `extend()`
 
@@ -282,15 +332,31 @@ process.on('SIGTERM', async () => {
 });
 ```
 
+**ES2023 explicit resource management** — every container implements `[Symbol.asyncDispose]`, so `await using` auto-disposes when the binding leaves scope:
+
+```typescript
+async function handleRequest(req: Request) {
+  await using request = app.scope({
+    requestId: () => crypto.randomUUID(),
+    handler: (c) => new Handler(c.logger, c.requestId),
+  });
+  return request.handler.run(req);
+} // request.dispose() fires automatically here, even on throw
+```
+
+Requires TypeScript ≥ 5.2 and a runtime with `Symbol.asyncDispose` (Node ≥ 20.4, Bun, Deno).
+
 ### Resetting cached singletons
 
 ```typescript
 app.db;             // creates instance
-app.reset('db');    // invalidates cache
+app.reset('db');    // invalidates cache for a specific key
 app.db;             // creates a NEW instance (factory re-runs, onInit re-fires)
+
+app.reset();        // no args → invalidates ALL cached singletons in this scope
 ```
 
-`reset()` is scope-local — it doesn't affect parent caches.
+`reset()` is scope-local — it doesn't affect parent caches. The no-arg variant also clears `initState`, the recorded dependency graph, and any captured warnings — useful for fully rebuilding state in long-running tests.
 
 ### Introspection for AI / observability
 
@@ -495,26 +561,39 @@ Use `preload()` to surface these as proper errors.
 
 ### Duplicate key detection (pre-spread)
 
+`detectDuplicateKeys` operates on **plain factory records** (`Record<string, Factory>`), not on `Module` functions returned by `defineModule()`. Use it when composing pre-built binding objects:
+
 ```typescript
 import { detectDuplicateKeys } from 'inwire';
 
-detectDuplicateKeys(authModule, userModule);
-// ['logger']  — appears in both
+const authBindings = {
+  logger: () => new Logger(),
+  session: () => new Session(),
+};
+const userBindings = {
+  logger: () => new Logger(), // duplicate
+  user: () => new User(),
+};
+
+detectDuplicateKeys(authBindings, userBindings);
+// ['logger']
 ```
+
+> For `defineModule()`-based modules, the type system already prevents same-key collisions across `.addModule()` calls at compile time — no runtime check needed.
 
 ### All error types
 
 | Error | Thrown when |
 |---|---|
-| `ContainerError` | Base class for all errors |
+| `ContainerError` | Base class for all errors. Every subclass carries `hint` + `details`. |
 | `ContainerConfigError` | Non-function value passed to `scope()` / `extend()` deps |
 | `ReservedKeyError` | Reserved method name used as a key |
 | `ProviderNotFoundError` | Key not registered (with fuzzy suggestion) |
 | `CircularDependencyError` | Cycle detected during resolution |
 | `UndefinedReturnError` | Factory returned `undefined` |
 | `FactoryError` | Factory threw (wraps original error) |
-| `ScopeMismatchWarning` | Singleton depends on transient (surfaced via `health()`) |
-| `AsyncInitErrorWarning` | Async `onInit()` rejected during lazy access (surfaced via `health()`) |
+| `ScopeMismatchWarning` | Singleton depends on transient (surfaced via `health().warnings`). Carries `hint` with refactor suggestions. |
+| `AsyncInitErrorWarning` | Async `onInit()` rejected during lazy access (surfaced via `health().warnings`). Carries `hint` pointing to `preload()`. |
 
 ---
 
@@ -533,14 +612,15 @@ detectDuplicateKeys(authModule, userModule);
 
 ## API Reference
 
-### Functions
+### Functions & classes
 
-| Export | Description |
-|---|---|
-| `container<T?>()` | Creates a `ContainerBuilder`. Pass `T` for [Contract Mode](#contract-mode-single-file-containers). |
-| `defineModule<TDeps?>()(fn)` | Defines a typed reusable module. See [Modules reference](#modules-reference). |
-| `transient(factory)` | Marks a factory as transient (for `scope()` / `extend()`). |
-| `detectDuplicateKeys(...modules)` | Returns keys that appear in more than one module object. |
+| Export | Kind | Description |
+|---|---|---|
+| `container<T?>()` | function | Creates a `ContainerBuilder`. Pass `T` for [Contract Mode](#contract-mode-single-file-containers). |
+| `ContainerBuilder` | class | Fluent builder class (rarely instantiated directly — `container()` is the entry point). Exported for type-only use and advanced composition. |
+| `defineModule<TDeps?>()(fn)` | function | Defines a typed reusable module. See [Modules reference](#modules-reference). |
+| `transient(factory)` | function | Marks a factory as transient (for `scope()` / `extend()`). |
+| `detectDuplicateKeys(...records)` | function | Returns keys that appear in more than one factory record (`Record<string, Factory>`). |
 
 ### Builder methods
 
@@ -565,6 +645,7 @@ detectDuplicateKeys(authModule, userModule);
 | `.describe(key)` | Single binding info (`ProviderInfo`). |
 | `.health()` | Health snapshot + warnings (`ContainerHealth`). |
 | `.dispose()` | LIFO `onDestroy()` on all resolved instances. |
+| `[Symbol.asyncDispose]()` | Alias of `.dispose()` — enables `await using container = ...` (ES2023). |
 
 ### Types
 
@@ -594,7 +675,9 @@ Clean Architecture with an enforced one-way dependency rule.
 src/
   index.ts                       # public barrel — only file consumers see
   domain/                        # pure contracts — no framework deps
-    types.ts                     # IResolver, ICycleDetector, IDependencyTracker, IValidator, AppDeps, ...
+    types.ts                     # barrel re-exporting types/public.ts + types/internal.ts
+    types/public.ts              # Container, IContainer, IContainerBuilder, AppDeps, helpers
+    types/internal.ts            # IResolver, ICycleDetector, IDependencyTracker, IValidator
     errors.ts                    # 7 error classes + 2 warnings, each with hint + details
     lifecycle.ts                 # OnInit / OnDestroy (duck-typed)
     validation.ts                # Validator, detectDuplicateKeys, Levenshtein
@@ -605,14 +688,16 @@ src/
     transient.ts                 # transient() marker (Symbol.for-based)
   application/                   # orchestration — depends on domain/ + infrastructure/
     container-builder.ts         # ContainerBuilder + container() factory  ▸ Composition Root
-    container-proxy.ts           # Proxy construction, scope/extend/reset  ▸ Composition Root
+    container-proxy.ts           # Proxy construction + dispatch            ▸ Composition Root
+    scoper.ts                    # builds child resolvers for .scope()     ▸ Composition Root
+    extender.ts                  # builds merged resolvers for .extend()   ▸ Composition Root
     define-module.ts             # defineModule() — both modes
     preloader.ts                 # topological sort (Kahn) + parallel onInit
     disposer.ts                  # reverse-order onDestroy + resilient errors
     introspection.ts             # inspect / describe / health / toString
 ```
 
-The `Resolver` receives its collaborators via constructor injection — no internal `new`, no hidden coupling. Application code depends on `IResolver`, never on the concrete class. Only the two **Composition Roots** (`container-builder.ts`, `container-proxy.ts`) instantiate concrete infrastructure.
+The `Resolver` receives its collaborators via constructor injection — no internal `new`, no hidden coupling. Application code depends on `IResolver`, never on the concrete class. The four **Composition Roots** (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`) are the only files allowed to instantiate concrete infrastructure (`Resolver`, `CycleDetector`, `DependencyTracker`).
 
 ---
 

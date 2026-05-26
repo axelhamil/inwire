@@ -586,13 +586,33 @@ If multiple `onDestroy()` calls throw, all errors are collected into an `Aggrega
 
 **GOTCHA**: After `dispose()`, accessing dependencies will re-resolve them (cache is cleared). This can cause unexpected behavior if you continue using the container after disposal.
 
-## detectDuplicateKeys(...modules)
+## container[Symbol.asyncDispose]()
 
 ```typescript
-function detectDuplicateKeys(...modules: Record<string, unknown>[]): string[]
+[Symbol.asyncDispose](): Promise<void>
 ```
 
-Pre-spread validation utility. Detects duplicate keys across multiple module objects. Returns an array of keys that appear in more than one module. Duplicate keys are also surfaced internally via `health().warnings` as `duplicate_key` warnings.
+ES2023 explicit resource management hook — alias of `.dispose()`. Enables the `await using` declaration: when the binding leaves scope (including via thrown exceptions), `dispose()` fires automatically.
+
+```typescript
+async function handleRequest(req: Request) {
+  await using request = app.scope({
+    requestId: () => crypto.randomUUID(),
+    handler: (c) => new Handler(c.logger, c.requestId),
+  });
+  return request.handler.run(req);
+} // request.dispose() fires automatically here, even on throw
+```
+
+Requirements: TypeScript ≥ 5.2 (the `await using` syntax) and a runtime exposing `Symbol.asyncDispose` (Node ≥ 20.4, Bun, Deno).
+
+## detectDuplicateKeys(...records)
+
+```typescript
+function detectDuplicateKeys(...records: Record<string, unknown>[]): string[]
+```
+
+Pre-spread validation utility. Operates on **plain factory records** (`Record<string, Factory>`), not on `Module` functions returned by `defineModule()`. Returns an array of keys that appear in more than one record. For `defineModule()`-based modules, the type system already prevents same-key collisions at compile time across `.addModule()` calls — no runtime check needed.
 
 ```typescript
 import { detectDuplicateKeys } from 'inwire';
@@ -721,7 +741,7 @@ Note: In the builder, non-function values passed to `.add()` are automatically t
 
 ### ReservedKeyError
 
-Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`.
+Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`.
 
 ```
 'inspect' is a reserved container method.
