@@ -211,4 +211,65 @@ describe('introspection', () => {
       expect(health.unresolved).toContain('c');
     });
   });
+
+  describe('structuredClone(inspect())', () => {
+    it('does not throw and deeply equals original', () => {
+      const c = container()
+        .add('db', () => 'pg')
+        .add('logger', () => 'log')
+        .build();
+
+      c.db;
+
+      const graph = c.inspect();
+      let clone: typeof graph | undefined;
+      expect(() => {
+        clone = structuredClone(graph);
+      }).not.toThrow();
+      expect(clone).toEqual(graph);
+    });
+
+    it('cloned result is a deep copy, not the same reference', () => {
+      const c = container()
+        .add('a', () => 1)
+        .build();
+
+      c.a;
+
+      const graph = c.inspect();
+      const clone = structuredClone(graph);
+      expect(clone).not.toBe(graph);
+      expect(clone.providers).not.toBe(graph.providers);
+    });
+
+    it('works after partial resolution', () => {
+      const c = container()
+        .add('resolved', () => 'yes')
+        .add('unresolved', () => 'no')
+        .build();
+
+      c.resolved;
+      // 'unresolved' is not accessed
+
+      const graph = c.inspect();
+      const clone = structuredClone(graph);
+      expect(clone.providers.resolved.resolved).toBe(true);
+      expect(clone.providers.unresolved.resolved).toBe(false);
+      expect(clone).toEqual(graph);
+    });
+
+    it('works with scoped container', () => {
+      const parent = container()
+        .add('db', () => 'pg')
+        .build();
+
+      const child = parent.scope({ requestId: () => 'req-1' }, { name: 'request' });
+      child.requestId;
+
+      const graph = child.inspect();
+      const clone = structuredClone(graph);
+      expect(clone).toEqual(graph);
+      expect(clone.name).toBe('request');
+    });
+  });
 });

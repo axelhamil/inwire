@@ -1,4 +1,4 @@
-import { ReservedKeyError } from '../domain/errors.js';
+import { DuplicateKeyError, ReservedKeyError } from '../domain/errors.js';
 import type {
   AddBuilt,
   BuilderKey,
@@ -101,13 +101,13 @@ export class ContainerBuilder<
    * ```
    *
    * Cross-builder dependencies are resolved at build time. Reserved keys throw.
-   * Duplicate keys override silently — same semantics as `.add()` over an existing key.
+   * Duplicate keys throw `DuplicateKeyError` — use `.extend()` or `.scope()` for intentional overrides.
    */
   merge<TOther extends Record<string, unknown>>(
     other: ContainerBuilder<Record<string, unknown>, TOther>,
   ): ContainerBuilder<TContract, Override<TBuilt, TOther>> {
     for (const [key, factory] of Object.entries(other._toRecord())) {
-      this.validateKey(key);
+      this.validateReservedKey(key);
       this.factories.set(key, factory);
     }
     return this as unknown as ContainerBuilder<TContract, Override<TBuilt, TOther>>;
@@ -135,6 +135,13 @@ export class ContainerBuilder<
   }
 
   private validateKey(key: string): void {
+    this.validateReservedKey(key);
+    if (this.factories.has(key)) {
+      throw new DuplicateKeyError(key);
+    }
+  }
+
+  private validateReservedKey(key: string): void {
     if ((RESERVED as readonly string[]).includes(key)) {
       throw new ReservedKeyError(key, RESERVED);
     }

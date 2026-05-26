@@ -25,6 +25,7 @@
     "lint:fix": "biome check --fix",
     "format": "biome format --write",
     "format:check": "biome format",
+    "bench": "tsx benchmarks/resolution.ts",
     "check": "biome check && pnpm typecheck",
     "example:web": "tsx examples/01-web-service.ts",
     "example:test": "tsx examples/02-modular-testing.ts",

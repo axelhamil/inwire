@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectDuplicateKeys, Validator } from '../src/domain/validation.js';
+import { Validator } from '../src/domain/validation.js';
 
 describe('Validator', () => {
   const validator = new Validator();
@@ -76,31 +76,30 @@ describe('Validator', () => {
       expect(validator.suggestKey('loger', ['logger'])).toBe('logger');
     });
   });
-});
 
-describe('detectDuplicateKeys', () => {
-  it('detects duplicate keys across modules', () => {
-    const moduleA = { logger: () => 1, db: () => 2 };
-    const moduleB = { logger: () => 3, cache: () => 4 };
+  describe('configurable similarityThreshold', () => {
+    it('default threshold (0.5) behaves as before', () => {
+      const v = new Validator();
+      // 'loger' vs 'logger' ~0.83 => suggests
+      expect(v.suggestKey('loger', ['logger'])).toBe('logger');
+      // 'a' vs 'abcd' 0.25 => no suggestion
+      expect(v.suggestKey('a', ['abcd'])).toBeUndefined();
+    });
 
-    const dupes = detectDuplicateKeys(moduleA, moduleB);
-    expect(dupes).toEqual(['logger']);
-  });
+    it('stricter threshold (0.8) rejects weaker matches', () => {
+      const v = new Validator(0.8);
+      // 'loger' vs 'logger' ~0.83 => still suggests
+      expect(v.suggestKey('loger', ['logger'])).toBe('logger');
+      // 'userRepo' vs 'userRepository' — distance 5, maxLen 14, similarity ~0.64 => rejected at 0.8
+      expect(v.suggestKey('userRepo', ['userRepository'])).toBeUndefined();
+    });
 
-  it('returns empty array when no duplicates', () => {
-    const moduleA = { a: () => 1 };
-    const moduleB = { b: () => 2 };
-
-    expect(detectDuplicateKeys(moduleA, moduleB)).toEqual([]);
-  });
-
-  it('handles three modules', () => {
-    const a = { x: () => 1 };
-    const b = { y: () => 2 };
-    const c = { x: () => 3, y: () => 4 };
-
-    const dupes = detectDuplicateKeys(a, b, c);
-    expect(dupes).toContain('x');
-    expect(dupes).toContain('y');
+    it('relaxed threshold (0.3) accepts weak matches', () => {
+      const v = new Validator(0.3);
+      // 'a' vs 'abcd' similarity 0.25 => still below 0.3, no suggestion
+      expect(v.suggestKey('a', ['abcd'])).toBeUndefined();
+      // 'ab' vs 'abcde' => distance 3, maxLen 5, similarity 0.4 => suggests at 0.3
+      expect(v.suggestKey('ab', ['abcde'])).toBe('abcde');
+    });
   });
 });

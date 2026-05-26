@@ -34,6 +34,8 @@ export const RESERVED_KEYS = [
   'health',
   'dispose',
   'toString',
+  'toJSON',
+  'size',
 ] as const;
 
 export type ReservedKey = (typeof RESERVED_KEYS)[number];
@@ -163,6 +165,15 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
 
   /** ES2023 explicit resource management hook — alias of {@link IContainer.dispose}. */
   [Symbol.asyncDispose](): Promise<void>;
+
+  /** Returns a plain object of all currently resolved (cached) deps — does NOT trigger lazy resolution. Used by JSON.stringify. */
+  toJSON(): Record<string, unknown>;
+
+  /** Count of registered providers (factories), regardless of resolution state. */
+  readonly size: number;
+
+  /** Iterate over `[key, resolvedValue]` pairs for all registered keys. Triggers lazy resolution. */
+  [Symbol.iterator](): IterableIterator<[string, unknown]>;
 }
 
 /**

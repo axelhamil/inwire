@@ -29,6 +29,7 @@ export {
   CircularDependencyError,
   ContainerConfigError,
   ContainerError,
+  DuplicateKeyError,
   FactoryError,
   ProviderNotFoundError,
   ReservedKeyError,
@@ -48,5 +49,4 @@ export type {
   ProviderInfo,
   ScopeOptions,
 } from './domain/types.js';
-export { detectDuplicateKeys } from './domain/validation.js';
 export { transient } from './infrastructure/transient.js';

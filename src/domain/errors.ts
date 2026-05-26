@@ -49,6 +49,28 @@ export class ContainerConfigError extends ContainerError {
 }
 
 /**
+ * Thrown when a key is registered more than once on the same builder.
+ * Use `.extend()` or `.scope()` for intentional overrides at runtime.
+ *
+ * @example
+ * ```typescript
+ * container().add('db', () => new DB()).add('db', () => new DB());
+ * // DuplicateKeyError: 'db' is already registered in this container.
+ * // hint: "Use .extend({ db: ... }) to override at runtime, or .scope({ db: ... }) for request-level overrides."
+ * ```
+ */
+export class DuplicateKeyError extends ContainerError {
+  readonly hint: string;
+  readonly details: { key: string };
+
+  constructor(key: string) {
+    super(`'${key}' is already registered in this container.`);
+    this.hint = `Use .extend({ ${key}: ... }) to override at runtime, or .scope({ ${key}: ... }) for request-level overrides.`;
+    this.details = { key };
+  }
+}
+
+/**
  * Thrown when a reserved container method name is used as a dependency key.
  *
  * @example

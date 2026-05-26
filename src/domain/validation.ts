@@ -13,6 +13,12 @@ import { RESERVED_KEYS } from './types.js';
  * ```
  */
 export class Validator implements IValidator {
+  private readonly similarityThreshold: number;
+
+  constructor(similarityThreshold: number = 0.5) {
+    this.similarityThreshold = similarityThreshold;
+  }
+
   /**
    * Validates that all values in the config are factory functions
    * and that no reserved keys are used.
@@ -53,29 +59,8 @@ export class Validator implements IValidator {
     if (!bestMatch) return undefined;
     const maxLen = Math.max(key.length, bestMatch.length);
     const similarity = 1 - bestDistance / maxLen;
-    return similarity >= 0.5 ? bestMatch : undefined;
+    return similarity >= this.similarityThreshold ? bestMatch : undefined;
   }
-}
-
-/**
- * Detects duplicate keys across multiple modules (spread objects).
- * Returns an array of keys that appear in more than one source.
- */
-export function detectDuplicateKeys(...modules: Record<string, unknown>[]): string[] {
-  const seen = new Map<string, number>();
-  const duplicates: string[] = [];
-
-  for (const mod of modules) {
-    for (const key of Object.keys(mod)) {
-      const count = (seen.get(key) ?? 0) + 1;
-      seen.set(key, count);
-      if (count === 2) {
-        duplicates.push(key);
-      }
-    }
-  }
-
-  return duplicates;
 }
 
 /**

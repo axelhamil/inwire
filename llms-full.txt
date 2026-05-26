@@ -103,7 +103,8 @@ add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V): ContainerBuilder<T
 Registers a dependency. If `factoryOrInstance` is a function, it's treated as a lazy factory. Otherwise, it's wrapped as `() => value` (eager instance). Returns a new builder with the accumulated type.
 
 Validation at runtime:
-- Reserved keys (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`) throw `ReservedKeyError`
+- Reserved keys (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`) throw `ReservedKeyError`
+- Re-registering an existing key throws `DuplicateKeyError` (use `.extend()` / `.scope()` for intentional overrides)
 
 ### .addTransient(key, factory)
 
@@ -606,23 +607,46 @@ async function handleRequest(req: Request) {
 
 Requirements: TypeScript ≥ 5.2 (the `await using` syntax) and a runtime exposing `Symbol.asyncDispose` (Node ≥ 20.4, Bun, Deno).
 
-## detectDuplicateKeys(...records)
+## Duplicate keys
+
+`.add()` and `.addTransient()` throw `DuplicateKeyError` if the key is already registered — no silent overwrites:
 
 ```typescript
-function detectDuplicateKeys(...records: Record<string, unknown>[]): string[]
+container()
+  .add('logger', () => new ConsoleLogger())
+  .add('logger', () => new FileLogger()); // throws DuplicateKeyError
 ```
 
-Pre-spread validation utility. Operates on **plain factory records** (`Record<string, Factory>`), not on `Module` functions returned by `defineModule()`. Returns an array of keys that appear in more than one record. For `defineModule()`-based modules, the type system already prevents same-key collisions at compile time across `.addModule()` calls — no runtime check needed.
+For intentional overrides (test doubles, plugins, env-specific bindings), use `.extend()` or `.scope()` on a built container.
+
+## container.size
 
 ```typescript
-import { detectDuplicateKeys } from 'inwire';
-
-const authModule = { logger: () => new AuthLogger(), auth: () => new AuthService() };
-const userModule = { logger: () => new UserLogger(), user: () => new UserService() };
-
-detectDuplicateKeys(authModule, userModule);
-// ['logger'] — appears in both modules
+const app = container().add('a', () => 1).add('b', () => 2).build();
+app.size; // 2
 ```
+
+Read-only number of registered providers. Counts factories, not resolved instances.
+
+## container.toJSON()
+
+```typescript
+const app = container().add('a', () => 1).build();
+app.a;                      // resolve
+JSON.stringify(app);        // '{"a":1}' — only resolved deps
+```
+
+Returns a plain object of currently cached (resolved) singletons. Does **not** trigger lazy resolution. Enables `JSON.stringify(container)` and `structuredClone(container.toJSON())`.
+
+## for…of container
+
+```typescript
+for (const [key, value] of app) { … }
+const entries = [...app];
+const map = new Map(app);
+```
+
+Implements `Symbol.iterator` yielding `[key, value]` pairs over every registered key (triggers lazy resolution as it iterates). Container methods are not included.
 
 ## String(container)
 
@@ -741,7 +765,7 @@ Note: In the builder, non-function values passed to `.add()` are automatically t
 
 ### ReservedKeyError
 
-Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`.
+Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`.
 
 ```
 'inspect' is a reserved container method.
@@ -750,6 +774,18 @@ hint: "Rename this dependency, e.g. 'inspectService' or 'myInspect'."
 
 Constructor: `new ReservedKeyError(key: string, reserved: readonly string[])`
 Details: `{ key, reserved }`
+
+### DuplicateKeyError
+
+Thrown when `.add()` or `.addTransient()` is called twice with the same key on a `ContainerBuilder`. `.extend()` and `.scope()` are unaffected — they intentionally allow overrides.
+
+```
+Duplicate key 'logger': this key is already registered on the builder.
+hint: "Use .extend() or .scope() on a built container for intentional overrides."
+```
+
+Constructor: `new DuplicateKeyError(key: string)`
+Details: `{ key }`
 
 ### ProviderNotFoundError
 

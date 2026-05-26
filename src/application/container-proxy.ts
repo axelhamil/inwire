@@ -66,6 +66,7 @@ export function buildContainerProxy(
     describe: (key: string) => introspection.describe(key),
     health: () => introspection.health(),
     toString: () => introspection.toString(),
+    toJSON: (): Record<string, unknown> => Object.fromEntries(resolver.getCache()),
 
     dispose: () => disposer.dispose(),
   };
@@ -81,10 +82,21 @@ export function buildContainerProxy(
           if (prop === Symbol.asyncDispose) {
             return () => disposer.dispose();
           }
+          if (prop === Symbol.iterator) {
+            return function* () {
+              for (const key of resolver.getAllRegisteredKeys()) {
+                yield [key, resolver.resolve(key)] as [string, unknown];
+              }
+            };
+          }
           return undefined;
         }
 
         const key = prop;
+
+        if (key === 'size') {
+          return resolver.getAllRegisteredKeys().length;
+        }
 
         if (key in methods) {
           return methods[key as keyof typeof methods];
@@ -97,6 +109,7 @@ export function buildContainerProxy(
         if (typeof prop === 'symbol') return false;
         const key = prop;
         return (
+          key === 'size' ||
           key in methods ||
           resolver.getFactories().has(key) ||
           resolver.getAllRegisteredKeys().includes(key)
@@ -104,12 +117,15 @@ export function buildContainerProxy(
       },
 
       ownKeys() {
-        return [...resolver.getAllRegisteredKeys(), ...Object.keys(methods)];
+        return [...resolver.getAllRegisteredKeys(), ...Object.keys(methods), 'size'];
       },
 
       getOwnPropertyDescriptor(_target, prop) {
         if (typeof prop === 'symbol') return undefined;
         const key = prop;
+        if (key === 'size') {
+          return { configurable: true, enumerable: false, writable: false };
+        }
         if (
           key in methods ||
           resolver.getFactories().has(key) ||

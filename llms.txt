@@ -22,7 +22,6 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
   - **Pinia-style (recommended for multi-module apps)** — `defineModule()` (no generic). `c` is typed as the augmentable global `AppDeps` interface. Each module file augments `AppDeps` with what it PROVIDES via `declare module 'inwire' { interface AppDeps { … } }`. Cross-module forward references work, order-independent.
   - **Local prereqs** — `defineModule<TDeps>()`. `c` is typed locally as `TDeps`. Module declares what it CONSUMES inline. No global state; no cross-module forward refs (prereqs must be added before).
 - `transient(factory)` — Marks a factory as transient for scope/extend (new instance on every access, no caching).
-- `detectDuplicateKeys(...modules)` — Pre-spread validation utility. Detects keys that appear in more than one module object.
 
 ## ContainerBuilder Methods
 
@@ -44,6 +43,9 @@ SOLID principles: each file has a single responsibility. The Resolver receives c
 - `.health()` — Returns `ContainerHealth` with warnings (e.g. scope mismatches).
 - `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order. Resilient: collects all errors, throws `AggregateError` if multiple failures.
 - `[Symbol.asyncDispose]()` — Alias of `.dispose()`. Enables ES2023 `await using container = ...` for automatic disposal at scope exit (requires TS ≥ 5.2 and Node ≥ 20.4, Bun, or Deno).
+- `.size` — Read-only number of registered providers.
+- `.toJSON()` — Plain object of resolved (cached) deps only. Does not trigger lazy resolution. Makes `JSON.stringify(container)` work.
+- `[Symbol.iterator]()` — Yields `[key, value]` pairs for every registered provider (triggers lazy resolution). Enables `for…of`, spread, `Array.from`.
 
 ## Types
 
@@ -68,6 +70,7 @@ All errors extend `ContainerError` and include `hint` (actionable fix) and `deta
 
 - `ContainerConfigError` — Non-function value in deps definition (scope/extend)
 - `ReservedKeyError` — Reserved container method name used as dependency key
+- `DuplicateKeyError` — `.add()` or `.addTransient()` called twice with the same key (use `.extend()` / `.scope()` for intentional overrides)
 - `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion via Levenshtein)
 - `CircularDependencyError` — Circular dependency detected in resolution chain
 - `UndefinedReturnError` — Factory returned `undefined`

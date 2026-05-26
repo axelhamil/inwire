@@ -110,7 +110,6 @@ describe('container builder', () => {
       .add('a', () => 1)
       .build();
 
-    expect((c as any)[Symbol.iterator]).toBeUndefined();
     expect((c as any)[Symbol.for('random')]).toBeUndefined();
   });
 
@@ -211,8 +210,6 @@ describe('container builder', () => {
       c.name;
       c.version;
 
-      // Direct JSON.stringify(c) triggers toJSON lookup on the proxy, which throws.
-      // Spread first to extract values, then serialize.
       const json = JSON.stringify({ ...c });
       const parsed = JSON.parse(json);
       expect(parsed.name).toBe('inwire');
@@ -229,5 +226,262 @@ describe('container builder', () => {
       expect(names).toContain('inspect');
       expect(names).toContain('dispose');
     });
+  });
+});
+
+describe('toJSON()', () => {
+  it('JSON.stringify(container) returns valid JSON with only resolved deps', () => {
+    const c = container()
+      .add('name', () => 'inwire')
+      .add('version', () => 1)
+      .add('lazy', () => 'not-yet')
+      .build();
+
+    c.name;
+    c.version;
+    // 'lazy' is not resolved
+
+    const json = JSON.stringify(c);
+    const parsed = JSON.parse(json);
+    expect(parsed.name).toBe('inwire');
+    expect(parsed.version).toBe(1);
+    expect('lazy' in parsed).toBe(false);
+  });
+
+  it('does not trigger lazy resolution of unresolved deps', () => {
+    let called = false;
+    const c = container()
+      .add('eager', () => 'yes')
+      .add('lazy', () => {
+        called = true;
+        return 'triggered';
+      })
+      .build();
+
+    c.eager;
+    expect(called).toBe(false);
+    JSON.stringify(c);
+    expect(called).toBe(false);
+  });
+
+  it('returns empty object for a container with no resolved deps', () => {
+    const c = container()
+      .add('a', () => 1)
+      .add('b', () => 2)
+      .build();
+
+    const json = JSON.stringify(c);
+    expect(JSON.parse(json)).toEqual({});
+  });
+
+  it('toJSON() method returns a plain Record', () => {
+    const c = container()
+      .add('x', () => 42)
+      .build();
+
+    c.x;
+    const obj = c.toJSON();
+    expect(obj).toEqual({ x: 42 });
+    expect(Object.getPrototypeOf(obj)).toBe(Object.prototype);
+  });
+});
+
+describe('size', () => {
+  it('returns count of registered providers', () => {
+    const c = container()
+      .add('a', () => 1)
+      .add('b', () => 2)
+      .add('c', () => 3)
+      .build();
+
+    expect(c.size).toBe(3);
+  });
+
+  it('empty container has size 0', () => {
+    const c = container().build();
+    expect(c.size).toBe(0);
+  });
+
+  it('is not affected by resolution state', () => {
+    const c = container()
+      .add('x', () => 10)
+      .add('y', () => 20)
+      .build();
+
+    expect(c.size).toBe(2);
+    c.x;
+    expect(c.size).toBe(2);
+  });
+
+  it('includes parent keys in scoped container', () => {
+    const parent = container()
+      .add('a', () => 1)
+      .add('b', () => 2)
+      .build();
+
+    const child = parent.scope({ c: () => 3 });
+    expect(child.size).toBe(3);
+  });
+
+  it('includes all keys in extended container', () => {
+    const base = container()
+      .add('a', () => 1)
+      .build();
+
+    const extended = base.extend({ b: () => 2, c: () => 3 });
+    expect(extended.size).toBe(3);
+  });
+
+  it('size is not enumerable in Object.keys()', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    const keys = Object.keys(c);
+    expect(keys).not.toContain('size');
+  });
+});
+
+describe('Symbol.iterator', () => {
+  it('for...of iterates [key, value] pairs and triggers resolution', () => {
+    const c = container()
+      .add('a', () => 1)
+      .add('b', () => 2)
+      .build();
+
+    const entries: [string, unknown][] = [];
+    for (const entry of c) {
+      entries.push(entry);
+    }
+
+    expect(entries).toContainEqual(['a', 1]);
+    expect(entries).toContainEqual(['b', 2]);
+    expect(entries.length).toBe(2);
+  });
+
+  it('spread via Array.from works', () => {
+    const c = container()
+      .add('x', () => 10)
+      .add('y', () => 20)
+      .build();
+
+    const entries = Array.from(c);
+    expect(entries).toContainEqual(['x', 10]);
+    expect(entries).toContainEqual(['y', 20]);
+  });
+
+  it('[...container] spread works', () => {
+    const c = container()
+      .add('p', () => 'ping')
+      .build();
+
+    const entries = [...c];
+    expect(entries).toContainEqual(['p', 'ping']);
+  });
+
+  it('only iterates registered dep keys, not container methods', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .add('cache', () => 'redis')
+      .build();
+
+    const keys = [...c].map(([k]) => k);
+    expect(keys).not.toContain('inspect');
+    expect(keys).not.toContain('dispose');
+    expect(keys).not.toContain('scope');
+    expect(keys).not.toContain('size');
+    expect(keys).toContain('db');
+    expect(keys).toContain('cache');
+  });
+
+  it('iterating triggers lazy resolution', () => {
+    let called = false;
+    const c = container()
+      .add('lazy', () => {
+        called = true;
+        return 'resolved';
+      })
+      .build();
+
+    expect(called).toBe(false);
+    const entries = [...c];
+    expect(called).toBe(true);
+    expect(entries).toContainEqual(['lazy', 'resolved']);
+  });
+
+  it('works on scoped containers', () => {
+    const parent = container()
+      .add('a', () => 1)
+      .build();
+
+    const child = parent.scope({ b: () => 2 });
+    const entries = [...child];
+    const keys = entries.map(([k]) => k);
+    expect(keys).toContain('a');
+    expect(keys).toContain('b');
+  });
+
+  it('works on extended containers', () => {
+    const base = container()
+      .add('a', () => 1)
+      .build();
+
+    const extended = base.extend({ b: () => 2 });
+    const entries = [...extended];
+    expect(entries).toContainEqual(['a', 1]);
+    expect(entries).toContainEqual(['b', 2]);
+  });
+});
+
+describe('coercion', () => {
+  it('String(container) returns the inspect string', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    const str = String(c);
+    expect(typeof str).toBe('string');
+    expect(str).toContain('Container');
+  });
+
+  it('template literal coercion returns the inspect string', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    const str = `${c}`;
+    expect(typeof str).toBe('string');
+    expect(str).toContain('Container');
+  });
+
+  it('string concatenation returns the inspect string', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    // biome-ignore lint/style/useTemplate: intentional string coercion test
+    const str = c + '';
+    expect(typeof str).toBe('string');
+    expect(str).toContain('Container');
+  });
+
+  it('+container (numeric coercion) produces NaN', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    // Symbol.toPrimitive returns the inspect string for any hint;
+    // coercing a non-numeric string to number yields NaN.
+    const num = +c;
+    expect(Number.isNaN(num)).toBe(true);
+  });
+
+  it('loose equality with a string is false', () => {
+    const c = container()
+      .add('db', () => 'pg')
+      .build();
+
+    // biome-ignore lint/suspicious/noDoubleEquals: intentional loose equality coercion test
+    expect(c == 'something').toBe(false);
   });
 });

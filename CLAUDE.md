@@ -65,9 +65,9 @@ src/
 **What lives here:**
 
 - `types.ts` — all interfaces: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`, `IContainer`, `Container<T>`, `Factory<T>`, `RESERVED_KEYS`, `AppDeps` (augmentable global interface for cross-module typing).
-- `errors.ts` — 7 error classes (all extend `ContainerError` with `hint` + `details`) + 2 warning types.
+- `errors.ts` — 8 error classes (all extend `ContainerError` with `hint` + `details`) + 2 warning types.
 - `lifecycle.ts` — `OnInit`/`OnDestroy` interfaces + duck-type guards (`hasOnInit`, `hasOnDestroy`).
-- `validation.ts` — `Validator` class (implements `IValidator`), `detectDuplicateKeys`, Levenshtein distance.
+- `validation.ts` — `Validator` class (configurable `similarityThreshold` via constructor), Levenshtein distance.
 
 **Rules:**
 
@@ -177,8 +177,8 @@ The public API is defined in `src/index.ts`. **If it's not in this list, it's no
 
 Exported:
 
-- **Values:** `container()`, `ContainerBuilder`, `defineModule`, `transient`, `detectDuplicateKeys`.
-- **Errors (values):** `ContainerError`, `CircularDependencyError`, `ContainerConfigError`, `FactoryError`, `ProviderNotFoundError`, `ReservedKeyError`, `UndefinedReturnError`, `AsyncInitErrorWarning`, `ScopeMismatchWarning`.
+- **Values:** `container()`, `ContainerBuilder`, `defineModule`, `transient`.
+- **Errors (values):** `ContainerError`, `CircularDependencyError`, `ContainerConfigError`, `DuplicateKeyError`, `FactoryError`, `ProviderNotFoundError`, `ReservedKeyError`, `UndefinedReturnError`, `AsyncInitErrorWarning`, `ScopeMismatchWarning`.
 - **Types:** `OnInit`, `OnDestroy`, `AppDeps`, `Container`, `IContainer`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions`, `Module`, `InferModuleDeps`, `InferModuleBuilt`.
 
 Internal (NOT exported): `Resolver`, `CycleDetector`, `DependencyTracker`, `Preloader`, `Disposer`, `Introspection`, `Validator`, `TRANSIENT_MARKER`.

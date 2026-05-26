@@ -559,27 +559,17 @@ app.health().warnings;
 
 Use `preload()` to surface these as proper errors.
 
-### Duplicate key detection (pre-spread)
+### Duplicate keys
 
-`detectDuplicateKeys` operates on **plain factory records** (`Record<string, Factory>`), not on `Module` functions returned by `defineModule()`. Use it when composing pre-built binding objects:
+`.add()` and `.addTransient()` throw `DuplicateKeyError` if the key is already registered — no silent overwrites:
 
 ```typescript
-import { detectDuplicateKeys } from 'inwire';
-
-const authBindings = {
-  logger: () => new Logger(),
-  session: () => new Session(),
-};
-const userBindings = {
-  logger: () => new Logger(), // duplicate
-  user: () => new User(),
-};
-
-detectDuplicateKeys(authBindings, userBindings);
-// ['logger']
+container()
+  .add('logger', () => new ConsoleLogger())
+  .add('logger', () => new FileLogger()); // throws DuplicateKeyError
 ```
 
-> For `defineModule()`-based modules, the type system already prevents same-key collisions across `.addModule()` calls at compile time — no runtime check needed.
+For **intentional** overrides (test doubles, plugins, environment-specific bindings), use `.extend()` or `.scope()` on a built container — both are documented override mechanisms.
 
 ### All error types
 
@@ -588,6 +578,7 @@ detectDuplicateKeys(authBindings, userBindings);
 | `ContainerError` | Base class for all errors. Every subclass carries `hint` + `details`. |
 | `ContainerConfigError` | Non-function value passed to `scope()` / `extend()` deps |
 | `ReservedKeyError` | Reserved method name used as a key |
+| `DuplicateKeyError` | `.add()` or `.addTransient()` called twice with the same key |
 | `ProviderNotFoundError` | Key not registered (with fuzzy suggestion) |
 | `CircularDependencyError` | Cycle detected during resolution |
 | `UndefinedReturnError` | Factory returned `undefined` |
@@ -620,7 +611,6 @@ detectDuplicateKeys(authBindings, userBindings);
 | `ContainerBuilder` | class | Fluent builder class (rarely instantiated directly — `container()` is the entry point). Exported for type-only use and advanced composition. |
 | `defineModule<TDeps?>()(fn)` | function | Defines a typed reusable module. See [Modules reference](#modules-reference). |
 | `transient(factory)` | function | Marks a factory as transient (for `scope()` / `extend()`). |
-| `detectDuplicateKeys(...records)` | function | Returns keys that appear in more than one factory record (`Record<string, Factory>`). |
 
 ### Builder methods
 
@@ -646,6 +636,9 @@ detectDuplicateKeys(authBindings, userBindings);
 | `.health()` | Health snapshot + warnings (`ContainerHealth`). |
 | `.dispose()` | LIFO `onDestroy()` on all resolved instances. |
 | `[Symbol.asyncDispose]()` | Alias of `.dispose()` — enables `await using container = ...` (ES2023). |
+| `.size` | `readonly number` — count of registered providers. |
+| `.toJSON()` | Plain object of currently resolved (cached) deps. Does **not** trigger lazy resolution. Makes `JSON.stringify(container)` work. |
+| `[Symbol.iterator]()` | Yields `[key, value]` pairs for every registered provider. Triggers lazy resolution. Enables `for...of`, spread, `Array.from`. |
 
 ### Types
 
@@ -680,7 +673,7 @@ src/
     types/internal.ts            # IResolver, ICycleDetector, IDependencyTracker, IValidator
     errors.ts                    # 7 error classes + 2 warnings, each with hint + details
     lifecycle.ts                 # OnInit / OnDestroy (duck-typed)
-    validation.ts                # Validator, detectDuplicateKeys, Levenshtein
+    validation.ts                # Validator (configurable similarity threshold), Levenshtein
   infrastructure/                # mechanisms — depends on domain/ only
     resolver.ts                  # lazy resolution, singleton cache, parent chain
     cycle-detector.ts            # circular dependency detection

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container, detectDuplicateKeys } from '../src/index.js';
+import { container } from '../src/index.js';
 
 // === Domain interfaces ===
 interface UserRepository {
@@ -90,14 +90,6 @@ describe('integration: DDD scenario', () => {
 
     const user = c.userService.getUser('any');
     expect(user).toEqual({ id: 'test', name: 'Test User' });
-  });
-
-  it('detects duplicate keys across modules', () => {
-    const moduleA = { logger: () => 'a-logger', db: () => 'a-db' };
-    const moduleB = { logger: () => 'b-logger', cache: () => 'b-cache' };
-
-    const dupes = detectDuplicateKeys(moduleA, moduleB);
-    expect(dupes).toEqual(['logger']);
   });
 
   it('scope for request-level isolation', () => {
