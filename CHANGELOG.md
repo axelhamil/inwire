@@ -1,3 +1,16 @@
+# [3.0.0](https://github.com/axelhamil/inwire/compare/v2.4.0...v3.0.0) (2026-05-26)
+
+
+* feat!: throw on duplicate keys, add toJSON/size/iterator, configurable fuzzy threshold ([828c0b6](https://github.com/axelhamil/inwire/commit/828c0b61812f5bbabb863307118c6fec10c77696)), closes [#3](https://github.com/axelhamil/inwire/issues/3) [#5](https://github.com/axelhamil/inwire/issues/5) [#6](https://github.com/axelhamil/inwire/issues/6) [#7](https://github.com/axelhamil/inwire/issues/7) [#8](https://github.com/axelhamil/inwire/issues/8) [#9](https://github.com/axelhamil/inwire/issues/9) [#11](https://github.com/axelhamil/inwire/issues/11) [#12](https://github.com/axelhamil/inwire/issues/12) [#19](https://github.com/axelhamil/inwire/issues/19) [#7](https://github.com/axelhamil/inwire/issues/7) [#6](https://github.com/axelhamil/inwire/issues/6) [#12](https://github.com/axelhamil/inwire/issues/12) [#8](https://github.com/axelhamil/inwire/issues/8) [#9](https://github.com/axelhamil/inwire/issues/9) [#3](https://github.com/axelhamil/inwire/issues/3)
+
+
+### BREAKING CHANGES
+
+* `detectDuplicateKeys` removed from the public API.
+`.add()` and `.addTransient()` now throw `DuplicateKeyError` when a key is
+already registered — silent overwrites are gone. Use `.extend()` or `.scope()`
+on a built container for intentional overrides.
+
 # [2.4.0](https://github.com/axelhamil/inwire/compare/v2.3.2...v2.4.0) (2026-05-26)
 
 
