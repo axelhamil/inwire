@@ -1,10 +1,3 @@
-# [2.4.0](https://github.com/axelhamil/inwire/compare/v2.3.2...v2.4.0) (2026-05-26)
-
-
-### Features
-
-* ES2023 asyncDispose, clean-arch refactor, doc realignment ([4782ad2](https://github.com/axelhamil/inwire/commit/4782ad2ba7a3f15ed21cba0eac574eda9399d87f))
-
 ## [2.3.2](https://github.com/axelhamil/inwire/compare/v2.3.1...v2.3.2) (2026-05-07)
 
 ## [2.3.1](https://github.com/axelhamil/inwire/compare/v2.3.0...v2.3.1) (2026-05-02)
