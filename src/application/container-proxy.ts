@@ -1,4 +1,4 @@
-import type { Container, ScopeOptions } from '../domain/types.js';
+import type { Container, IValidator, ScopeOptions } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
 import type { Resolver } from '../infrastructure/resolver.js';
 import { Disposer } from './disposer.js';
@@ -7,9 +7,7 @@ import { Introspection } from './introspection.js';
 import { Preloader } from './preloader.js';
 import { Scoper } from './scoper.js';
 
-const validator = new Validator();
-const scoper = new Scoper(validator);
-const extender = new Extender(validator);
+const defaultValidator = new Validator();
 
 /**
  * Wraps a {@link Resolver} in the user-facing ES Proxy:
@@ -26,17 +24,20 @@ const extender = new Extender(validator);
 export function buildContainerProxy(
   resolver: Resolver,
   builderFactory?: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
+  validator: IValidator = defaultValidator,
 ): Container<Record<string, unknown>> {
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
   const disposer = new Disposer(resolver);
+  const scoper = new Scoper(validator);
+  const extender = new Extender(validator);
 
   const methods = {
     scope: (extra: Record<string, (c: unknown) => unknown>, options?: ScopeOptions) =>
-      buildContainerProxy(scoper.scope(resolver, extra, options), builderFactory),
+      buildContainerProxy(scoper.scope(resolver, extra, options), builderFactory, validator),
 
     extend: (extra: Record<string, (c: unknown) => unknown>) =>
-      buildContainerProxy(extender.extend(resolver, extra), builderFactory),
+      buildContainerProxy(extender.extend(resolver, extra), builderFactory, validator),
 
     module: (fn: (b: unknown) => unknown) => {
       if (!builderFactory) throw new Error('module() is not available');
@@ -84,7 +85,7 @@ export function buildContainerProxy(
           }
           if (prop === Symbol.iterator) {
             return function* () {
-              for (const key of resolver.getAllRegisteredKeys()) {
+              for (const key of resolver.getFactories().keys()) {
                 yield [key, resolver.resolve(key)] as [string, unknown];
               }
             };
@@ -95,7 +96,7 @@ export function buildContainerProxy(
         const key = prop;
 
         if (key === 'size') {
-          return resolver.getAllRegisteredKeys().length;
+          return resolver.getFactories().size;
         }
 
         if (key in methods) {
@@ -105,19 +106,23 @@ export function buildContainerProxy(
         return resolver.resolve(key);
       },
 
+      // `in` mirrors resolution, which walks the parent chain — unlike the own-key
+      // traps below, which report this container's own bindings (prototype-like split).
       has(_target, prop) {
-        if (typeof prop === 'symbol') return false;
+        if (typeof prop === 'symbol') {
+          return (
+            prop === Symbol.asyncDispose ||
+            prop === Symbol.iterator ||
+            prop === Symbol.toPrimitive ||
+            prop === Symbol.toStringTag
+          );
+        }
         const key = prop;
-        return (
-          key === 'size' ||
-          key in methods ||
-          resolver.getFactories().has(key) ||
-          resolver.getAllRegisteredKeys().includes(key)
-        );
+        return key === 'size' || key in methods || resolver.getAllRegisteredKeys().includes(key);
       },
 
       ownKeys() {
-        return [...resolver.getAllRegisteredKeys(), ...Object.keys(methods), 'size'];
+        return [...resolver.getFactories().keys(), ...Object.keys(methods), 'size'];
       },
 
       getOwnPropertyDescriptor(_target, prop) {
@@ -126,15 +131,16 @@ export function buildContainerProxy(
         if (key === 'size') {
           return { configurable: true, enumerable: false, writable: false };
         }
-        if (
-          key in methods ||
-          resolver.getFactories().has(key) ||
-          resolver.getAllRegisteredKeys().includes(key)
-        ) {
+        if (key in methods) {
+          return { configurable: true, enumerable: false, writable: false };
+        }
+        if (resolver.getFactories().has(key)) {
+          // Accessor descriptor: reading `.value` would force eager resolution and
+          // break laziness, so the getter defers it to the caller.
           return {
             configurable: true,
-            enumerable: !(key in methods),
-            writable: false,
+            enumerable: true,
+            get: () => resolver.resolve(key),
           };
         }
         return undefined;
