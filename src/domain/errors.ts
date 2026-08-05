@@ -1,5 +1,10 @@
 import type { ContainerWarning } from './types.js';
 
+/** Capitalizes a key for use in error hints. Safe on the empty string. */
+function capitalize(key: string): string {
+  return key.length === 0 ? key : `${key[0]?.toUpperCase() ?? ''}${key.slice(1)}`;
+}
+
 /**
  * Base class for all container errors.
  * Every error includes a human-readable `hint` and structured `details`
@@ -86,7 +91,7 @@ export class ReservedKeyError extends ContainerError {
 
   constructor(key: string, reserved: readonly string[]) {
     super(`'${key}' is a reserved container method.`);
-    this.hint = `Rename this dependency, e.g. '${key}Service' or 'my${key[0].toUpperCase()}${key.slice(1)}'.`;
+    this.hint = `Rename this dependency, e.g. '${key}Service' or 'my${capitalize(key)}'.`;
     this.details = { key, reserved: [...reserved] };
   }
 }
@@ -123,7 +128,7 @@ export class ProviderNotFoundError extends ContainerError {
       `Cannot resolve '${chain[0] ?? key}': dependency '${key}' not found.${chainStr}${registeredStr}${suggestionStr}`,
     );
 
-    const addSnippet = `.add('${key}', (c) => new ${key[0].toUpperCase()}${key.slice(1)}(/* deps */))`;
+    const addSnippet = `.add('${key}', (c) => new ${capitalize(key)}(/* deps */))`;
     this.hint = suggestion
       ? `Did you mean '${suggestion}'? Or add '${key}' to your container:\n  container()${addSnippet}`
       : `Add '${key}' to your container:\n  container()${addSnippet}`;
@@ -230,7 +235,7 @@ export class ScopeMismatchWarning implements ContainerWarning {
       'This is almost always a bug.',
       '',
       'To fix:',
-      `  1. Make '${singletonKey}' transient too: transient((c) => new ${singletonKey[0].toUpperCase()}${singletonKey.slice(1)}(c.${transientKey}))`,
+      `  1. Make '${singletonKey}' transient too: transient((c) => new ${capitalize(singletonKey)}(c.${transientKey}))`,
       `  2. Make '${transientKey}' singleton if it doesn't need to change`,
       `  3. Inject a factory instead: ${transientKey}Factory: () => () => <your value>`,
     ].join('\n');
@@ -260,6 +265,33 @@ export class AsyncInitErrorWarning implements ContainerWarning {
     this.message = `onInit() for '${key}' rejected: ${errorMessage}`;
     this.hint = `Use preload('${key}') to await and handle async init errors.`;
     this.details = { key, error: errorMessage };
+  }
+}
+
+/**
+ * Thrown when the topological sort of the dependency graph cannot complete because
+ * some keys remain unordered. In practice this is a defensive guard — `Resolver`
+ * detects cycles via `CircularDependencyError` before `topologicalLevels` is reached,
+ * so this error is not reachable through the normal public API.
+ *
+ * @example
+ * ```typescript
+ * // TopologicalSortError: Topological sort incomplete: keys [a, b] could not be ordered.
+ * // hint: "A cycle exists among the listed keys. To debug:..."
+ * ```
+ */
+export class TopologicalSortError extends ContainerError {
+  readonly hint: string;
+  readonly details: { remaining: string[] };
+
+  constructor(remaining: string[]) {
+    super(`Topological sort incomplete: keys [${remaining.join(', ')}] could not be ordered.`);
+    this.hint = [
+      'A cycle exists among the listed keys. To debug:',
+      '  1. Access any affected key on the container — it will throw a CircularDependencyError with the full chain',
+      '  2. Restructure the dependency graph to remove the cycle',
+    ].join('\n');
+    this.details = { remaining };
   }
 }
 

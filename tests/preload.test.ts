@@ -409,6 +409,31 @@ describe('preload', () => {
       expect(inited).toBe(true);
     });
 
+    it('does not evict pre-existing cache entries when resolve phase fails', async () => {
+      let initCount = 0;
+
+      const c = container()
+        .add('pre', () => ({
+          onInit() {
+            initCount++;
+          },
+        }))
+        .add('bad', () => {
+          throw new Error('factory boom');
+        })
+        .build();
+
+      c.pre; // lazy-resolve 'pre' before preload — it enters the cache
+      expect(initCount).toBe(1);
+
+      // preload fails on 'bad'; 'pre' was already cached before preload started
+      // so the cleanup loop must NOT evict it (covers the false branch of !cacheKeysBefore.has)
+      await expect(c.preload()).rejects.toThrow('factory boom');
+
+      c.pre; // still cached — onInit must not fire again
+      expect(initCount).toBe(1);
+    });
+
     it('transient onInit fires after preload', async () => {
       let inited = false;
 

@@ -1,3 +1,4 @@
+import { TopologicalSortError } from '../domain/errors.js';
 import type { IResolver } from '../domain/types.js';
 
 /**
@@ -44,9 +45,7 @@ export function topologicalLevels(depGraph: Map<string, string[]>, keys: Set<str
   if (processedCount < keys.size) {
     const processedSet = new Set(levels.flat());
     const remaining = [...keys].filter((k) => !processedSet.has(k));
-    throw new Error(
-      `Incomplete topological sort: [${remaining.join(', ')}] could not be ordered. This may indicate a cycle in the dependency graph.`,
-    );
+    throw new TopologicalSortError(remaining);
   }
 
   return levels;
