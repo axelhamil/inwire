@@ -508,12 +508,12 @@ The string key acts as a token (à la NestJS) but is type-safe at compile time. 
 `extend()` is not affected: it flattens everything into a single resolver, so its "own" view includes all bindings.
 
 ```typescript
-const parent = app.scope({ extra: () => 42 });
+const child = app.scope({ extra: () => 42 });
 
-parent.size;           // 1 — only 'extra' (parent's own bindings)
-parent.db;             // resolved from base (inherited)
-'db' in parent;        // true  (inherited)
-[...parent.inspect().providers] // only 'extra'
+child.size;                             // 1 — only 'extra', the scope's own binding
+child.db;                               // resolved through the parent chain (inherited)
+'db' in child;                          // true (inherited)
+Object.keys(child.inspect().providers); // ['extra'] — own view only
 ```
 
 ---
