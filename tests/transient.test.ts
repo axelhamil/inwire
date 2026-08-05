@@ -60,7 +60,7 @@ describe('transient', () => {
       .build();
 
     const graph = c.inspect();
-    expect(graph.providers.singleton.scope).toBe('singleton');
-    expect(graph.providers.ephemeral.scope).toBe('transient');
+    expect(graph.providers.singleton?.scope).toBe('singleton');
+    expect(graph.providers.ephemeral?.scope).toBe('transient');
   });
 });

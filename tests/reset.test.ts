@@ -101,10 +101,10 @@ describe('reset', () => {
         .build();
 
       c.db;
-      expect(c.inspect().providers.db.resolved).toBe(true);
+      expect(c.inspect().providers.db?.resolved).toBe(true);
 
       c.reset('db');
-      expect(c.inspect().providers.db.resolved).toBe(false);
+      expect(c.inspect().providers.db?.resolved).toBe(false);
     });
 
     it('after reset, describe() shows resolved=false and deps=[]', () => {
