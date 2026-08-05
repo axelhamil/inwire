@@ -99,7 +99,7 @@ To register a function as a value: `.add('fn', () => myFunction)`.
 ### .add(key, factoryOrInstance)
 
 ```typescript
-add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V): ContainerBuilder<TContract, TBuilt & Record<K, V>>
+add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V): ContainerBuilder<TContract, Omit<TBuilt, K> & Record<K, V>>
 ```
 
 Registers a dependency. If `factoryOrInstance` is a function, it's treated as a lazy factory. Otherwise, it's wrapped as `() => value` (eager instance). Returns a new builder with the accumulated type.
@@ -111,7 +111,7 @@ Validation at runtime:
 ### .addTransient(key, factory)
 
 ```typescript
-addTransient<K, V>(key: K, factory: (c: TBuilt) => V): ContainerBuilder<TContract, TBuilt & Record<K, V>>
+addTransient<K, V>(key: K, factory: (c: TBuilt) => V): ContainerBuilder<TContract, Omit<TBuilt, K> & Record<K, V>>
 ```
 
 Registers a transient dependency — a new instance is created on every property access, bypassing the singleton cache.
@@ -130,8 +130,8 @@ app.requestId === app.requestId;   // false — new every time
 
 ```typescript
 addModule<TDepsM extends Record<string, any>, TNew extends Record<string, any>>(
-  module: (builder: ContainerBuilder<TContract, TDepsM>) => ContainerBuilder<TContract, TNew>,
-): ContainerBuilder<TContract, Override<TBuilt, TNew>>
+  module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
+): ContainerBuilder<TContract, Omit<TBuilt, keyof TNew> & TNew>
 ```
 
 Applies a `Module` (typically produced by `defineModule()`) to the builder. The accumulated `TBuilt` is preserved across the call — chaining `addModule()` accumulates bindings from every applied module.
@@ -160,7 +160,7 @@ const app = container()
 ```typescript
 merge<TOther extends Record<string, unknown>>(
   other: ContainerBuilder<Record<string, unknown>, TOther>,
-): ContainerBuilder<TContract, TBuilt & TOther>
+): ContainerBuilder<TContract, Omit<TBuilt, keyof TOther> & TOther>
 ```
 
 Fuses a standalone `ContainerBuilder` into this one. All factories of `other` are copied into the host. Cross-builder dependencies are resolved at build time. Reserved keys throw `ReservedKeyError`; duplicate keys are silently overwritten (last write wins). This differs from `.add()` which throws `DuplicateKeyError` — `.merge()` is designed for composing independent builders where overrides are intentional.
@@ -215,8 +215,8 @@ Use `addTransient()` on the builder for transient deps at build time. Use `trans
 
 ```typescript
 function defineModule<TDeps extends Record<string, any> = AppDeps>(): <TBuilt>(
-  fn: (builder: ContainerBuilder<Record<string, unknown>, TDeps>)
-       => ContainerBuilder<Record<string, unknown>, TBuilt>,
+  fn: (builder: IContainerBuilder<Record<string, unknown>, TDeps>)
+       => IContainerBuilder<Record<string, unknown>, TBuilt>,
 ) => Module<TDeps, TBuilt>
 ```
 
@@ -325,7 +325,7 @@ Empty by default. The augmentation surface for global-mode `defineModule()`. Eac
 scope<E extends Record<string, (c: T) => unknown>>(
   extra: E,
   options?: ScopeOptions,
-): Container<T & { [K in keyof E]: ReturnType<E[K]> }>
+): Container<Omit<T, keyof E> & { [K in keyof E]: ReturnType<E[K]> }>
 ```
 
 Creates a child container with additional dependencies. The child inherits all parent singletons via a parent Resolver chain. Scoped singletons are independent — they are cached in the child's own cache.
@@ -382,7 +382,7 @@ const child = parent.scope({
 ```typescript
 extend<E extends Record<string, (c: T) => unknown>>(
   extra: E,
-): Container<T & { [K in keyof E]: ReturnType<E[K]> }>
+): Container<Omit<T, keyof E> & { [K in keyof E]: ReturnType<E[K]> }>
 ```
 
 Returns a new container with additional dependencies. Unlike `scope()`, the existing singleton cache is **shared** (copied) — already-resolved singletons from the original container are available without re-resolution.
@@ -410,8 +410,8 @@ extended.db;     // new dependency
 
 ```typescript
 module<TNew extends Record<string, unknown>>(
-  fn: (builder: ContainerBuilder<Record<string, unknown>, T>) => ContainerBuilder<Record<string, unknown>, TNew>,
-): Container<TNew>
+  fn: (builder: IContainerBuilder<Record<string, unknown>, T>) => IContainerBuilder<Record<string, unknown>, T & TNew>,
+): Container<T & TNew>
 ```
 
 Applies a module post-build using the builder pattern for incremental type accumulation of `c`. Semantically equivalent to `extend()` but uses `ContainerBuilder` so that each `.add()` in the callback types `c` with all previously added deps.
@@ -730,8 +730,8 @@ interface AppDeps {}
 
 // Module type — produced by defineModule()
 type Module<TDeps extends Record<string, any> = AppDeps, TBuilt extends Record<string, any> = TDeps> =
-  (builder: ContainerBuilder<Record<string, unknown>, TDeps>)
-    => ContainerBuilder<Record<string, unknown>, TBuilt>;
+  (builder: IContainerBuilder<Record<string, unknown>, TDeps>)
+    => IContainerBuilder<Record<string, unknown>, TBuilt>;
 
 // Inference helpers for Module<TDeps, TBuilt>
 type InferModuleDeps<M>  = M extends Module<infer D, any> ? D : never;
