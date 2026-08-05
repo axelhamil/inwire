@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { topologicalLevels } from '../src/application/preloader.js';
+import { ContainerError, TopologicalSortError } from '../src/index.js';
 
 describe('topologicalLevels', () => {
   it('returns independent keys in a single level', () => {
@@ -41,12 +42,48 @@ describe('topologicalLevels', () => {
     expect(levels[1]).toEqual(['service']);
   });
 
-  it('throws on incomplete sort (likely cycle)', () => {
+  it('ignores deps not present in the keys set', () => {
+    const depGraph = new Map<string, string[]>([
+      ['a', ['external']],
+      ['b', []],
+    ]);
+    const keys = new Set(['a', 'b']); // 'external' is outside the set
+    const levels = topologicalLevels(depGraph, keys);
+    // 'external' is not tracked, so both a and b have in-degree 0
+    expect(levels).toHaveLength(1);
+    expect(levels[0]).toEqual(expect.arrayContaining(['a', 'b']));
+  });
+
+  it('throws TopologicalSortError on incomplete sort (cycle)', () => {
     const depGraph = new Map<string, string[]>([
       ['a', ['b']],
       ['b', ['a']],
     ]);
     const keys = new Set(['a', 'b']);
-    expect(() => topologicalLevels(depGraph, keys)).toThrow(/Incomplete topological sort/);
+    expect(() => topologicalLevels(depGraph, keys)).toThrow(TopologicalSortError);
+  });
+
+  it('TopologicalSortError is a ContainerError with hint and details', () => {
+    const depGraph = new Map<string, string[]>([
+      ['a', ['b']],
+      ['b', ['a']],
+    ]);
+    const keys = new Set(['a', 'b']);
+
+    let caught: unknown;
+    try {
+      topologicalLevels(depGraph, keys);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(ContainerError);
+    expect(caught).toBeInstanceOf(TopologicalSortError);
+    const err = caught as TopologicalSortError;
+    expect(typeof err.hint).toBe('string');
+    expect(err.hint.length).toBeGreaterThan(0);
+    expect(err.details).toHaveProperty('remaining');
+    expect(err.details.remaining).toEqual(expect.arrayContaining(['a', 'b']));
+    expect(err.message).toMatch(/Topological sort incomplete/);
   });
 });
