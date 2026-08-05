@@ -21,10 +21,11 @@ pnpm test              # vitest run (654 tests, 52 files) — includes typecheck
 pnpm test:watch        # vitest in watch mode
 pnpm test:coverage     # vitest run --coverage (thresholds: 90% all metrics)
 pnpm build             # tsdown → dist/index.mjs + dist/index.d.mts
-pnpm typecheck         # tsc --noEmit (src + tests + examples, three tsconfigs)
+pnpm typecheck         # tsc --noEmit (src + tests + scripts + examples, three tsconfigs)
+pnpm check:docs        # type-checks every ```typescript block in README.md + llms-full.txt
 pnpm lint              # biome check
 pnpm lint:fix          # biome check --fix
-pnpm check             # biome check && pnpm typecheck && pnpm test:coverage
+pnpm check             # biome check && pnpm typecheck && pnpm check:docs && pnpm test:coverage
 ```
 
 ## Stack

@@ -194,6 +194,9 @@ import type { OnInit, OnDestroy } from 'inwire';
 class Database implements OnInit, OnDestroy {
   async onInit()    { await this.connect(); }
   async onDestroy() { await this.disconnect(); }
+
+  private async connect() {/* open the pool */}
+  private async disconnect() {/* drain the pool */}
 }
 ```
 
