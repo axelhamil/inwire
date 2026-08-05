@@ -32,6 +32,7 @@ export class Extender {
       factories: merged,
       cache: new Map(base.getCache()),
       initCalled: base.getInitCalled(),
+      destroyedInstances: base.getDestroyedInstances(),
       cycleDetector: new CycleDetector(),
       dependencyTracker: new DependencyTracker(),
       validator: this.validator,

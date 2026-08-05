@@ -58,6 +58,8 @@ export interface IResolver {
   getName(): string | undefined;
 
   // Lifecycle delegation
+  /** Instances whose `onDestroy()` already ran, shared across `extend()` siblings. */
+  getDestroyedInstances(): WeakSet<object>;
   setDeferOnInit(defer: boolean): void;
   callOnInit(key: string): Promise<void>;
   getInitCalled(): Set<string>;
