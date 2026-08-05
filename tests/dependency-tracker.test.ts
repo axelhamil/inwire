@@ -51,6 +51,42 @@ describe('DependencyTracker', () => {
     expect(tracker.getDepGraph().size).toBe(0);
   });
 
+  it('deduplicates repeated access to the same key, preserving first-seen order', () => {
+    const tracker = new DependencyTracker();
+    const deps: string[] = [];
+    const resolved = new Map<string, unknown>([
+      ['db', 'db-instance'],
+      ['logger', 'logger-instance'],
+    ]);
+
+    const proxy = tracker.createTrackingProxy(deps, [], (key) => resolved.get(key));
+
+    // Access db three times and logger once — db should appear only once, first
+    (proxy as Record<string, unknown>).db;
+    (proxy as Record<string, unknown>).db;
+    (proxy as Record<string, unknown>).logger;
+    (proxy as Record<string, unknown>).db;
+
+    expect(deps).toEqual(['db', 'logger']);
+  });
+
+  it('still resolves the value on every access even when deduplicating', () => {
+    const tracker = new DependencyTracker();
+    const deps: string[] = [];
+    let callCount = 0;
+    const proxy = tracker.createTrackingProxy(deps, [], (key) => {
+      callCount++;
+      return key;
+    });
+
+    (proxy as Record<string, unknown>).svc;
+    (proxy as Record<string, unknown>).svc;
+    (proxy as Record<string, unknown>).svc;
+
+    expect(deps).toEqual(['svc']);
+    expect(callCount).toBe(3);
+  });
+
   it('ignores symbol property access on tracking proxy', () => {
     const tracker = new DependencyTracker();
     const deps: string[] = [];

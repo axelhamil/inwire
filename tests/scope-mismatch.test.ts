@@ -13,8 +13,8 @@ describe('scope mismatch detection', () => {
 
     const health = c.health();
     expect(health.warnings.length).toBeGreaterThan(0);
-    expect(health.warnings[0].type).toBe('scope_mismatch');
-    expect(health.warnings[0].details).toEqual({
+    expect(health.warnings[0]?.type).toBe('scope_mismatch');
+    expect(health.warnings[0]?.details).toEqual({
       singleton: 'service',
       transient: 'requestId',
     });
@@ -29,10 +29,11 @@ describe('scope mismatch detection', () => {
     c.service;
 
     const warning = c.health().warnings[0];
-    expect(warning.message).toContain('service');
-    expect(warning.message).toContain('requestId');
-    expect(warning.message).toContain('Singleton');
-    expect(warning.message).toContain('transient');
+    expect(warning).toBeDefined();
+    expect(warning?.message).toContain('service');
+    expect(warning?.message).toContain('requestId');
+    expect(warning?.message).toContain('Singleton');
+    expect(warning?.message).toContain('transient');
   });
 
   it('multiple transient deps produce multiple warnings', () => {
@@ -48,6 +49,20 @@ describe('scope mismatch detection', () => {
     expect(warnings.length).toBe(2);
     expect(warnings.map((w) => w.details.transient)).toContain('reqId');
     expect(warnings.map((w) => w.details.transient)).toContain('timestamp');
+  });
+
+  it('accessing the same transient N times from a singleton produces exactly one warning', () => {
+    const c = container()
+      .addTransient('requestId', () => Math.random())
+      .add('service', (c: any) => ({ a: c.requestId, b: c.requestId, d: c.requestId }))
+      .build();
+
+    c.service;
+
+    const warnings = c.health().warnings;
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]?.type).toBe('scope_mismatch');
+    expect(warnings[0]?.details).toEqual({ singleton: 'service', transient: 'requestId' });
   });
 
   it('no warning when singleton depends on singleton', () => {

@@ -37,8 +37,8 @@ describe('introspection', () => {
       c.a; // only resolve a
 
       const graph = c.inspect();
-      expect(graph.providers.a.resolved).toBe(true);
-      expect(graph.providers.b.resolved).toBe(false);
+      expect(graph.providers.a?.resolved).toBe(true);
+      expect(graph.providers.b?.resolved).toBe(false);
     });
 
     it('shows transient scope', () => {
@@ -48,8 +48,8 @@ describe('introspection', () => {
         .build();
 
       const graph = c.inspect();
-      expect(graph.providers.singleton.scope).toBe('singleton');
-      expect(graph.providers.ephemeral.scope).toBe('transient');
+      expect(graph.providers.singleton?.scope).toBe('singleton');
+      expect(graph.providers.ephemeral?.scope).toBe('transient');
     });
   });
 
@@ -131,7 +131,7 @@ describe('introspection', () => {
 
       const graph = child.inspect();
       expect(graph.providers.requestId).toBeDefined();
-      expect(graph.providers.requestId.resolved).toBe(true);
+      expect(graph.providers.requestId?.resolved).toBe(true);
       // Parent providers are NOT in child's inspect — only local factories
       expect(graph.providers.db).toBeUndefined();
     });
@@ -187,9 +187,9 @@ describe('introspection', () => {
 
       const graph = extended.inspect();
       expect(graph.providers.db).toBeDefined();
-      expect(graph.providers.db.resolved).toBe(true);
+      expect(graph.providers.db?.resolved).toBe(true);
       expect(graph.providers.cache).toBeDefined();
-      expect(graph.providers.cache.resolved).toBe(true);
+      expect(graph.providers.cache?.resolved).toBe(true);
     });
 
     it('health() on extended includes all providers', () => {
@@ -209,6 +209,43 @@ describe('introspection', () => {
       expect(health.resolved).toContain('a');
       expect(health.unresolved).toContain('b');
       expect(health.unresolved).toContain('c');
+    });
+  });
+
+  describe('dep deduplication', () => {
+    it('inspect().providers.X.deps has no duplicates when factory accesses same key multiple times', () => {
+      const c = container()
+        .add('db', () => ({ n: 1 }))
+        .add('svc', (x: any) => ({ a: x.db, b: x.db, c: x.db }))
+        .build();
+
+      c.svc;
+
+      const info = c.inspect().providers.svc;
+      expect(info?.deps).toEqual(['db']);
+    });
+
+    it('describe(key).deps has no duplicates', () => {
+      const c = container()
+        .add('db', () => ({ n: 1 }))
+        .add('svc', (x: any) => ({ a: x.db, b: x.db }))
+        .build();
+
+      c.svc;
+
+      expect(c.describe('svc').deps).toEqual(['db']);
+    });
+
+    it('preserves first-seen order when multiple distinct deps are accessed repeatedly', () => {
+      const c = container()
+        .add('a', () => 1)
+        .add('b', () => 2)
+        .add('svc', (x: any) => [x.a, x.b, x.a, x.b, x.a])
+        .build();
+
+      c.svc;
+
+      expect(c.describe('svc').deps).toEqual(['a', 'b']);
     });
   });
 
@@ -253,8 +290,8 @@ describe('introspection', () => {
 
       const graph = c.inspect();
       const clone = structuredClone(graph);
-      expect(clone.providers.resolved.resolved).toBe(true);
-      expect(clone.providers.unresolved.resolved).toBe(false);
+      expect(clone.providers.resolved?.resolved).toBe(true);
+      expect(clone.providers.unresolved?.resolved).toBe(false);
       expect(clone).toEqual(graph);
     });
 
