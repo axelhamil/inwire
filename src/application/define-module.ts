@@ -1,5 +1,4 @@
-import type { AppDeps } from '../domain/types.js';
-import type { ContainerBuilder } from './container-builder.js';
+import type { AppDeps, IContainerBuilder } from '../domain/types.js';
 
 /**
  * A reusable module: a function that extends a builder with new bindings.
@@ -15,8 +14,8 @@ export type Module<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   TBuilt extends Record<string, any> = TDeps,
 > = (
-  builder: ContainerBuilder<Record<string, unknown>, TDeps>,
-) => ContainerBuilder<Record<string, unknown>, TBuilt>;
+  builder: IContainerBuilder<Record<string, unknown>, TDeps>,
+) => IContainerBuilder<Record<string, unknown>, TBuilt>;
 
 /**
  * Defines a reusable, strongly-typed module.
@@ -81,8 +80,8 @@ export function defineModule<
     TBuilt extends Record<string, any>,
   >(
     fn: (
-      builder: ContainerBuilder<Record<string, unknown>, TDeps>,
-    ) => ContainerBuilder<Record<string, unknown>, TBuilt>,
+      builder: IContainerBuilder<Record<string, unknown>, TDeps>,
+    ) => IContainerBuilder<Record<string, unknown>, TBuilt>,
   ): Module<TDeps, TBuilt> => fn;
 }
 

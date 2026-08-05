@@ -93,6 +93,27 @@ export type AddBuilt<TBuilt, K extends string, V> = Override<TBuilt, Record<K, V
 export interface AppDeps {}
 
 /**
+ * Options for creating a container.
+ */
+export interface ContainerOptions {
+  /**
+   * Minimum similarity (0–1) for a registered key to be suggested as a
+   * "Did you mean …?" fix in {@link ProviderNotFoundError}. Defaults to `0.5`.
+   *
+   * Raise it to only suggest near-identical keys, lower it to suggest more loosely.
+   * Set it to `1` to require an exact match, effectively disabling suggestions.
+   *
+   * @example
+   * ```typescript
+   * const app = container({ similarityThreshold: 0.8 })
+   *   .add('userRepository', () => new UserRepository())
+   *   .build();
+   * ```
+   */
+  similarityThreshold?: number;
+}
+
+/**
  * Options for creating a scoped container.
  */
 export interface ScopeOptions {

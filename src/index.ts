@@ -34,6 +34,7 @@ export {
   ProviderNotFoundError,
   ReservedKeyError,
   ScopeMismatchWarning,
+  TopologicalSortError,
   UndefinedReturnError,
 } from './domain/errors.js';
 export type { OnDestroy, OnInit } from './domain/lifecycle.js';
@@ -42,6 +43,7 @@ export type {
   Container,
   ContainerGraph,
   ContainerHealth,
+  ContainerOptions,
   ContainerWarning,
   Factory,
   IContainer,
