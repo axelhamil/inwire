@@ -1,3 +1,18 @@
+# [3.1.0](https://github.com/axelhamil/inwire/compare/v3.0.0...v3.1.0) (2026-08-05)
+
+
+### Bug Fixes
+
+* **container:** align own-key traps with introspection, detect well-known symbols ([f89f620](https://github.com/axelhamil/inwire/commit/f89f62072731c99372668c4845711a29108dc754))
+* **errors:** always raise a ContainerError, never a raw throw ([642a752](https://github.com/axelhamil/inwire/commit/642a752c99b15004d619318ee8796ec3f071e3d0))
+* **graph:** dedupe tracked dependencies ([94606d9](https://github.com/axelhamil/inwire/commit/94606d98960fd01c6818f1091f6fc635df30ed98))
+* **lifecycle:** run onDestroy once per instance across extend() ([ed534da](https://github.com/axelhamil/inwire/commit/ed534dac6440d45ff9d59fac224e2c4f6e320a59))
+
+
+### Features
+
+* **container:** expose similarityThreshold via ContainerOptions ([8b843e5](https://github.com/axelhamil/inwire/commit/8b843e57177f6833c2b9e115fcc1774cb40cfd9a))
+
 # [3.0.0](https://github.com/axelhamil/inwire/compare/v2.4.0...v3.0.0) (2026-05-26)
 
 
