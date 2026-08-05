@@ -3,8 +3,10 @@ import type {
   AddBuilt,
   BuilderKey,
   Container,
+  ContainerOptions,
   Factory,
   FactoryOrInstance,
+  IContainerBuilder,
   NonReservedKey,
   Override,
 } from '../domain/types.js';
@@ -34,6 +36,11 @@ export class ContainerBuilder<
   TBuilt extends Record<string, any> = {},
 > {
   private readonly factories = new Map<string, Factory>();
+  private readonly options: ContainerOptions;
+
+  constructor(options: ContainerOptions = {}) {
+    this.options = options;
+  }
 
   /**
    * Registers a dependency — factory (lazy) or instance (eager).
@@ -82,10 +89,10 @@ export class ContainerBuilder<
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
     TNew extends Record<string, any>,
   >(
-    module: (builder: ContainerBuilder<TContract, TDepsM>) => ContainerBuilder<TContract, TNew>,
+    module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
   ): ContainerBuilder<TContract, Override<TBuilt, TNew>> {
     return module(
-      this as unknown as ContainerBuilder<TContract, TDepsM>,
+      this as unknown as IContainerBuilder<TContract, TDepsM>,
     ) as unknown as ContainerBuilder<TContract, Override<TBuilt, TNew>>;
   }
 
@@ -101,7 +108,10 @@ export class ContainerBuilder<
    * ```
    *
    * Cross-builder dependencies are resolved at build time. Reserved keys throw.
-   * Duplicate keys throw `DuplicateKeyError` — use `.extend()` or `.scope()` for intentional overrides.
+   *
+   * Duplicate keys do NOT throw here: the merged builder wins (last write wins), which
+   * is what makes `.merge()` usable for overriding a module in tests. `.add()` is the
+   * strict path — it throws `DuplicateKeyError`.
    */
   merge<TOther extends Record<string, unknown>>(
     other: ContainerBuilder<Record<string, unknown>, TOther>,
@@ -125,13 +135,18 @@ export class ContainerBuilder<
    * Builds and returns the final container.
    */
   build(): Container<TBuilt> {
+    const validator = new Validator(this.options.similarityThreshold);
     const resolver = new Resolver({
       factories: new Map(this.factories),
       cycleDetector: new CycleDetector(),
       dependencyTracker: new DependencyTracker(),
-      validator: new Validator(),
+      validator,
     });
-    return buildContainerProxy(resolver, () => new ContainerBuilder()) as Container<TBuilt>;
+    return buildContainerProxy(
+      resolver,
+      () => new ContainerBuilder(this.options),
+      validator,
+    ) as Container<TBuilt>;
   }
 
   private validateKey(key: string): void {
@@ -172,6 +187,6 @@ export class ContainerBuilder<
 export function container<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   T extends Record<string, any> = Record<string, unknown>,
->(): ContainerBuilder<T> {
-  return new ContainerBuilder<T>();
+>(options?: ContainerOptions): ContainerBuilder<T> {
+  return new ContainerBuilder<T>(options);
 }
