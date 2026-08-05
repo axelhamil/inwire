@@ -313,14 +313,20 @@ describe('size', () => {
     expect(c.size).toBe(2);
   });
 
-  it('includes parent keys in scoped container', () => {
+  it('counts a scope own bindings, not the parent chain', () => {
     const parent = container()
       .add('a', () => 1)
       .add('b', () => 2)
       .build();
 
     const child = parent.scope({ c: () => 3 });
-    expect(child.size).toBe(3);
+    // Own view, consistent with inspect()/health()/toJSON() on a scope.
+    expect(child.size).toBe(1);
+    expect(Object.keys(child)).toEqual(['c']);
+    // Inherited bindings remain resolvable through the parent chain.
+    expect(child.a).toBe(1);
+    expect('a' in child).toBe(true);
+    expect(parent.size).toBe(2);
   });
 
   it('includes all keys in extended container', () => {
@@ -409,16 +415,17 @@ describe('Symbol.iterator', () => {
     expect(entries).toContainEqual(['lazy', 'resolved']);
   });
 
-  it('works on scoped containers', () => {
+  it('iterates a scope own bindings only', () => {
     const parent = container()
       .add('a', () => 1)
       .build();
 
     const child = parent.scope({ b: () => 2 });
-    const entries = [...child];
-    const keys = entries.map(([k]) => k);
-    expect(keys).toContain('a');
-    expect(keys).toContain('b');
+    const keys = [...child].map(([k]) => k);
+    expect(keys).toEqual(['b']);
+    // Inherited bindings stay resolvable, they are just not own entries.
+    expect(child.a).toBe(1);
+    expect('a' in child).toBe(true);
   });
 
   it('works on extended containers', () => {
@@ -481,6 +488,7 @@ describe('coercion', () => {
       .add('db', () => 'pg')
       .build();
 
+    // @ts-expect-error comparing a container to a string has no type overlap — that is the point
     // biome-ignore lint/suspicious/noDoubleEquals: intentional loose equality coercion test
     expect(c == 'something').toBe(false);
   });
