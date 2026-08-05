@@ -19,7 +19,13 @@ describe('ContainerBuilder.merge()', () => {
     });
 
     it('merged factories can consume deps registered in the host builder', () => {
-      const consumerModule = container().add('greeter', (c: { name: string }) => `hello ${c.name}`);
+      // `.merge()` targets standalone modules without prereqs: such a builder starts
+      // at TBuilt = {}, so a factory cannot *declare* a prereq in its signature here.
+      // Resolution still works at runtime — use `defineModule<TDeps>()` to get both.
+      const consumerModule = container().add(
+        'greeter',
+        (c) => `hello ${(c as { name: string }).name}`,
+      );
 
       const app = container()
         .add('name', () => 'world')
@@ -93,7 +99,7 @@ describe('ContainerBuilder.merge()', () => {
       const app = container()
         .merge(dbModule)
         .add('repo', (c) => {
-          expectTypeOf(c.db).toEqualTypeOf<{ q: () => string }>();
+          expectTypeOf(c.db).toEqualTypeOf<{ q: () => 'r' }>();
           return c.db.q();
         })
         .build();

@@ -59,7 +59,8 @@ describe('TypeScript type inference', () => {
       .addTransient('id', () => crypto.randomUUID())
       .build();
 
-    expectTypeOf(c.id).toEqualTypeOf<string>();
+    expectTypeOf(c.id).toEqualTypeOf<ReturnType<typeof crypto.randomUUID>>();
+    expectTypeOf(c.id).toExtend<string>();
   });
 
   it('scope extends the container type', () => {
@@ -188,7 +189,10 @@ describe('Builder type safety', () => {
       .build();
 
     expectTypeOf(c.logger).toEqualTypeOf<{ log: (msg: string) => void }>();
-    expectTypeOf(c.db).toEqualTypeOf<string>();
+    // The contract constrains what `.add()` accepts, it does not widen the result:
+    // `V` is inferred from the factory's return, so `db` keeps its literal type.
+    expectTypeOf(c.db).toEqualTypeOf<'postgres'>();
+    expectTypeOf(c.db).toExtend<AppDeps['db']>();
   });
 
   it('instance (non-function) values are registered eagerly', () => {

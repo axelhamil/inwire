@@ -94,7 +94,9 @@ describe('defineModule()', () => {
       const m = defineModule()((b) => b.add('x', () => 'hello').add('y', () => 42));
 
       type Built = InferModuleBuilt<typeof m>;
-      expectTypeOf<Built>().toEqualTypeOf<{ x: string; y: number }>();
+      // Global mode: TBuilt is `AppDeps` + what the module adds, and `AppDeps` is
+      // augmentable by any consumer — so only containment is assertable here.
+      expectTypeOf<Built>().toExtend<{ x: string; y: number }>();
     });
 
     it('extracts prerequisite deps via InferModuleDeps', () => {

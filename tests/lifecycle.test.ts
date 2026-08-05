@@ -175,8 +175,8 @@ describe('lifecycle', () => {
     // The error is now visible via health()
     const health = c.health();
     expect(health.warnings.length).toBe(1);
-    expect(health.warnings[0].type).toBe('async_init_error');
-    expect(health.warnings[0].message).toContain('init failed!');
+    expect(health.warnings[0]?.type).toBe('async_init_error');
+    expect(health.warnings[0]?.message).toContain('init failed!');
   });
 
   it('dispose clears async init warnings', async () => {
@@ -548,7 +548,7 @@ describe('lifecycle', () => {
       await Promise.resolve();
 
       expect(c.health().warnings.length).toBe(1);
-      expect(c.health().warnings[0].type).toBe('async_init_error');
+      expect(c.health().warnings[0]?.type).toBe('async_init_error');
 
       c.reset('failing');
       expect(c.health().warnings.length).toBe(0);
@@ -576,7 +576,7 @@ describe('lifecycle', () => {
 
       c.reset('fail1');
       expect(c.health().warnings.length).toBe(1);
-      expect(c.health().warnings[0].message).toContain('fail2');
+      expect(c.health().warnings[0]?.message).toContain('fail2');
     });
   });
 });

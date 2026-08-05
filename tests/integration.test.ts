@@ -163,8 +163,8 @@ describe('integration: DDD scenario', () => {
     expect(Object.keys(graph.providers)).toContain('userService');
     expect(Object.keys(graph.providers)).toContain('authService');
 
-    expect(graph.providers.userService.deps).toContain('logger');
-    expect(graph.providers.userService.deps).toContain('userRepo');
+    expect(graph.providers.userService?.deps).toContain('logger');
+    expect(graph.providers.userService?.deps).toContain('userRepo');
 
     const health = c.health();
     expect(health.totalProviders).toBe(4);

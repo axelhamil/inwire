@@ -56,9 +56,13 @@ describe('scope', () => {
       .add('db', () => 'postgres')
       .build();
 
+    // `c` is typed as the parent's shape: keys added in the *same* `scope()` call
+    // cannot be referenced type-safely (inferring E from itself would collapse every
+    // ReturnType to `unknown`). Resolution works at runtime — chain `.scope()` calls
+    // if you need the sibling to be typed.
     const child = parent.scope({
       requestId: () => 'req-456',
-      handler: (c) => `${c.db}:${c.requestId}`,
+      handler: (c) => `${c.db}:${(c as unknown as { requestId: string }).requestId}`,
     });
 
     expect(child.handler).toBe('postgres:req-456');

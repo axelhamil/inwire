@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container } from '../src/index.js';
+import { container, defineModule } from '../src/index.js';
 
 describe('module (post-build)', () => {
   it('applies a module to add dependencies post-build', () => {
@@ -142,13 +142,11 @@ describe('module (post-build)', () => {
   });
 
   it('module with addModule in the callback', () => {
-    const authModule = (b: any) => b.add('auth', () => 'authenticated');
+    const authModule = defineModule()((b) => b.add('auth', () => 'authenticated' as string));
 
     const base = container().add('config', { env: 'test' }).build();
 
-    const extended = base.module((b) =>
-      b.addModule(authModule).add('api', (c: any) => `${c.auth}-api`),
-    );
+    const extended = base.module((b) => b.addModule(authModule).add('api', (c) => `${c.auth}-api`));
 
     expect(extended.auth).toBe('authenticated');
     expect(extended.api).toBe('authenticated-api');
