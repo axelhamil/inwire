@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-inwire — type-safe dependency injection for TypeScript. ESM-only, zero runtime dependencies, ~4KB gzip.
+inwire — type-safe dependency injection for TypeScript. ESM-only, zero runtime dependencies, ~5 KB gzip.
 
 ## Philosophy
 
@@ -17,14 +17,14 @@ Cross-cutting rules. They apply everywhere; everything below is a consequence.
 ## Commands
 
 ```bash
-pnpm test              # vitest run (245 tests, 23 files)
+pnpm test              # vitest run (654 tests, 52 files) — includes typecheck
 pnpm test:watch        # vitest in watch mode
 pnpm test:coverage     # vitest run --coverage (thresholds: 90% all metrics)
 pnpm build             # tsdown → dist/index.mjs + dist/index.d.mts
-pnpm typecheck         # tsc --noEmit (src + examples/tsconfig.json)
+pnpm typecheck         # tsc --noEmit (src + tests + examples, three tsconfigs)
 pnpm lint              # biome check
 pnpm lint:fix          # biome check --fix
-pnpm check             # biome check && pnpm typecheck (full pre-commit check)
+pnpm check             # biome check && pnpm typecheck && pnpm test:coverage
 ```
 
 ## Stack
@@ -64,8 +64,8 @@ src/
 
 **What lives here:**
 
-- `types.ts` — all interfaces: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`, `IContainer`, `Container<T>`, `Factory<T>`, `RESERVED_KEYS`, `AppDeps` (augmentable global interface for cross-module typing).
-- `errors.ts` — 8 error classes (all extend `ContainerError` with `hint` + `details`) + 2 warning types.
+- `types.ts` — barrel re-export of `types/public.ts` (user-facing: `IContainer`, `IContainerBuilder`, `Container<T>`, `Factory<T>`, `RESERVED_KEYS`, `AppDeps`, `ContainerOptions`, `ScopeOptions`, graph/health shapes) and `types/internal.ts` (collaborator interfaces: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`).
+- `errors.ts` — 9 error classes (1 abstract `ContainerError` + 8 concrete, all with `hint` + `details`) + 2 warning types (`ScopeMismatchWarning`, `AsyncInitErrorWarning`).
 - `lifecycle.ts` — `OnInit`/`OnDestroy` interfaces + duck-type guards (`hasOnInit`, `hasOnDestroy`).
 - `validation.ts` — `Validator` class (configurable `similarityThreshold` via constructor), Levenshtein distance.
 
@@ -144,13 +144,13 @@ src/
 
 ### TypeScript
 
-- `strict: true`, target ES2022, module ES2022, `moduleResolution: bundler`.
+- `strict: true`, target ES2022, module ES2022, `moduleResolution: bundler`, `noUncheckedIndexedAccess: true`.
 - All imports use `.js` extensions. **Why:** ESM resolution requires explicit extensions; bundler resolution still maps `.js` → `.ts`.
 - `any` is used sparingly for generic constraints — always with a `biome-ignore` comment explaining why.
 
 ### Testing
 
-- Vitest with globals enabled.
+- Vitest with globals enabled and `typecheck.enabled: true` (uses `tsconfig.test.json` which includes `src` + `tests`).
 - Tests import from `'../src/index.js'` (the public barrel) **except** unit tests for internal classes. **Why:** validates the public API surface; internal unit tests cover non-exported classes (`CycleDetector`, `DependencyTracker`, `Preloader`, `Disposer`).
 - Coverage thresholds: 90% statements, branches, functions, lines. **Why:** library code with public API surface — branch/function regressions are user-facing.
 - Layout:
@@ -158,6 +158,8 @@ src/
   - Internal use cases: `tests/preloader.test.ts`, `tests/disposer.test.ts`.
   - Public API: everything else.
   - Integration: `tests/integration.test.ts`.
+
+**Vitest typecheck gotcha.** Enabling `typecheck.enabled: true` in `vitest.config.ts` is NOT sufficient — vitest reuses the project tsconfig, which by default only includes `src/`. If the test tsconfig does not include `tests/`, `expectTypeOf()` / `@ts-expect-error` assertions always pass regardless of the actual types. The fix: a dedicated `tsconfig.test.json` that includes both `src` and `tests`, pointed to via `typecheck.tsconfig` in `vitest.config.ts`.
 
 ### Git
 
@@ -178,8 +180,8 @@ The public API is defined in `src/index.ts`. **If it's not in this list, it's no
 Exported:
 
 - **Values:** `container()`, `ContainerBuilder`, `defineModule`, `transient`.
-- **Errors (values):** `ContainerError`, `CircularDependencyError`, `ContainerConfigError`, `DuplicateKeyError`, `FactoryError`, `ProviderNotFoundError`, `ReservedKeyError`, `UndefinedReturnError`, `AsyncInitErrorWarning`, `ScopeMismatchWarning`.
-- **Types:** `OnInit`, `OnDestroy`, `AppDeps`, `Container`, `IContainer`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions`, `Module`, `InferModuleDeps`, `InferModuleBuilt`.
+- **Errors (values):** `ContainerError`, `CircularDependencyError`, `ContainerConfigError`, `DuplicateKeyError`, `FactoryError`, `ProviderNotFoundError`, `ReservedKeyError`, `TopologicalSortError`, `UndefinedReturnError`, `AsyncInitErrorWarning`, `ScopeMismatchWarning`.
+- **Types:** `OnInit`, `OnDestroy`, `AppDeps`, `Container`, `IContainer`, `IContainerBuilder`, `ContainerOptions`, `Factory`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `ScopeOptions`, `Module`, `InferModuleDeps`, `InferModuleBuilt`.
 
 Internal (NOT exported): `Resolver`, `CycleDetector`, `DependencyTracker`, `Preloader`, `Disposer`, `Introspection`, `Validator`, `TRANSIENT_MARKER`.
 
@@ -216,6 +218,25 @@ Three patterns. Pick by the table below — never mix.
 2. Implement the concrete in `infrastructure/`.
 3. Add it to `ResolverDeps` in `resolver.ts` if `Resolver` consumes it.
 4. Inject in both Composition Roots (`container-builder.ts`, `container-proxy.ts`).
+
+## Runtime guarantees
+
+### scope() — own vs inherited keys (prototype-like split)
+
+`scope()` creates a parent-child resolver chain. Two views coexist, mirroring prototype inheritance:
+
+- **Own** (child's local bindings only): `size`, `Object.keys()`, `Symbol.iterator`, `inspect()`, `health()`, `describe()`, `toJSON()`, and `preload()` without arguments. A child's `size` counts only its own added bindings.
+- **Inherited** (walks the parent chain): property access `child.db` and the `in` operator `'db' in child`.
+
+`extend()` is unaffected — it flattens everything into a single resolver, so its "own" view contains all bindings (parent + extra).
+
+### dispose() — no double-call guarantee
+
+`onDestroy()` is called **at most once** per instance across a container and all containers derived from it via `extend()`. A shared `WeakSet<object>` (passed through `extend()` calls) tracks already-destroyed instances. This prevents double-destruction when two extended containers share the same cached singleton. `scope()` never had this issue: a child never destroys parent singletons.
+
+### Dependency graph deduplication
+
+A factory that accesses `c.db` three times produces `deps: ['db']` (one entry, order of first appearance preserved) and emits at most one `ScopeMismatchWarning` per dependency pair — not one per access.
 
 ## Top-level anti-patterns
 

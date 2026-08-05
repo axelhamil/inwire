@@ -1,7 +1,7 @@
 # inwire — Complete API Reference
 
 > Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
-> Proxy-based lazy singleton resolution. ~4KB gzipped, 0 runtime deps. Clean Architecture internals.
+> Proxy-based lazy singleton resolution. ~5 KB gzipped, 0 runtime deps. Clean Architecture internals.
 
 Install: `npm i inwire`
 License: MIT
@@ -35,10 +35,12 @@ The architecture follows Clean Architecture with three layers:
 ## container()
 
 ```typescript
-function container<T extends Record<string, unknown> = Record<string, unknown>>(): ContainerBuilder<T>
+function container<T extends Record<string, any> = Record<string, unknown>>(options?: ContainerOptions): ContainerBuilder<T>
 ```
 
-Creates a new `ContainerBuilder`. Two modes depending on the generic parameter:
+Creates a new `ContainerBuilder`. `options` is optional and accepts `{ similarityThreshold?: number }` (default `0.5`, range 0–1) to control the fuzzy "Did you mean …?" threshold in `ProviderNotFoundError`. The option propagates through `scope()`, `extend()`, and `module()` automatically.
+
+Two modes depending on the generic parameter:
 
 ### Free Mode (default)
 
@@ -161,7 +163,7 @@ merge<TOther extends Record<string, unknown>>(
 ): ContainerBuilder<TContract, TBuilt & TOther>
 ```
 
-Fuses a standalone `ContainerBuilder` into this one. All factories of `other` are copied into the host. Cross-builder dependencies are resolved at build time. Reserved keys throw; duplicate keys override silently (last write wins, same semantics as `.add()` over an existing key).
+Fuses a standalone `ContainerBuilder` into this one. All factories of `other` are copied into the host. Cross-builder dependencies are resolved at build time. Reserved keys throw `ReservedKeyError`; duplicate keys are silently overwritten (last write wins). This differs from `.add()` which throws `DuplicateKeyError` — `.merge()` is designed for composing independent builders where overrides are intentional.
 
 Use `.merge()` when a module has no external prerequisites and is naturally expressed as a standalone builder rather than a `Module`.
 
@@ -789,7 +791,7 @@ Details: `{ key }`
 
 ### ProviderNotFoundError
 
-Thrown when a dependency cannot be found during resolution. Includes Levenshtein-based fuzzy suggestion if a similar key exists (>= 50% similarity).
+Thrown when a dependency cannot be found during resolution. Includes Levenshtein-based fuzzy suggestion if a similar key exists. The similarity threshold defaults to `0.5` (50%) and is configurable via `container({ similarityThreshold })` at construction time.
 
 ```
 Cannot resolve 'userServce': dependency 'userServce' not found.
@@ -862,13 +864,25 @@ hint: "Use preload('db') to await and handle async init errors."
 Constructor: `new AsyncInitErrorWarning(key: string, error: unknown)`
 Properties: `type: 'async_init_error'`, `message`, `hint`, `details: { key, error }`
 
+### TopologicalSortError
+
+Thrown when the topological sort inside `preload()` cannot complete because some keys remain unordered. In practice this is a defensive guard — `Resolver` detects cycles via `CircularDependencyError` before `topologicalLevels` is reached, so this error is not reachable through the normal public API.
+
+```
+Topological sort incomplete: keys [a, b] could not be ordered.
+hint: "A cycle exists among the listed keys. Access any affected key to get a CircularDependencyError with the full chain."
+```
+
+Constructor: `new TopologicalSortError(remaining: string[])`
+Details: `{ remaining: string[] }`
+
 ## Gotchas and Common Pitfalls
 
 1. **Async onInit is fire-and-forget**: `onInit()` is called during property access but NOT awaited. Errors are swallowed. Use `await app.preload('key')` to properly await async initialization.
 
 2. **Scope mismatch**: A singleton depending on a transient freezes the transient value. The singleton will always see the first resolved value. Check `app.health().warnings` for `scope_mismatch` warnings.
 
-3. **Reserved keys**: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
+3. **Reserved keys**: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
 
 4. **Undefined return**: Factories that return `undefined` (missing return statement, void function) throw `UndefinedReturnError`. Every factory must return a value.
 

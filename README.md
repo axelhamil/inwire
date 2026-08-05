@@ -1,6 +1,6 @@
 # inwire
 
-**Type-safe dependency injection for TypeScript.** No decorators. No tokens. No `reflect-metadata`. Just a fluent builder, a Proxy, and full type inference. ~4 KB gzip, zero runtime dependencies.
+**Type-safe dependency injection for TypeScript.** No decorators. No tokens. No `reflect-metadata`. Just a fluent builder, a Proxy, and full type inference. ~5 KB gzip, zero runtime dependencies.
 
 [![NPM Version](https://img.shields.io/npm/v/inwire)](https://www.npmjs.com/package/inwire)
 [![CI](https://img.shields.io/github/actions/workflow/status/axelhamil/inwire/ci.yml)](https://github.com/axelhamil/inwire/actions)
@@ -34,7 +34,7 @@ app.users.findById('42'); // lazy, singleton, fully typed
 | **Circular deps** | Caught with full chain + fix hint | Stack overflow or cryptic crash |
 | **Async lifecycle** | First-class `preload()` with topological parallelism | Manual `Promise.all` plumbing |
 | **Introspection** | `inspect()` returns JSON graph for LLMs / dashboards | None |
-| **Bundle size** | ~4 KB gzip | 10–50 KB |
+| **Bundle size** | ~5 KB gzip | 10–50 KB |
 | **Runtime** | Pure ES2022 — Node, Bun, Deno, Workers, browsers | Often Node-only |
 
 The **dependency graph is a side product**: a tracking Proxy records which keys each factory accesses, so `inspect()` returns the real graph without you ever annotating it.
@@ -494,6 +494,62 @@ app.ILogger; // typed as Logger (interface), not ConsoleLogger
 
 The string key acts as a token (à la NestJS) but is type-safe at compile time. For multi-module apps, **use Pinia-style instead** — it scales across files; Contract Mode does not.
 
+> **Note (Contract Mode typing nuance):** `container<AppDeps>().add('db', () => 'postgres')` gives `c.db` the **literal** type `'postgres'`, not `string`. The contract constrains what you can add; it doesn't widen the inferred return type.
+
+---
+
+## Scope — own vs inherited keys
+
+`scope()` creates a parent-child resolver chain. Two views coexist — think JS prototype inheritance:
+
+- **Own** (child's local bindings only): `size`, `Object.keys()`, `Symbol.iterator`, `inspect()`, `health()`, `toJSON()`, and `preload()` with no arguments.
+- **Inherited** (walks the parent chain): property access `child.db` and the `in` operator.
+
+`extend()` is not affected: it flattens everything into a single resolver, so its "own" view includes all bindings.
+
+```typescript
+const parent = app.scope({ extra: () => 42 });
+
+parent.size;           // 1 — only 'extra' (parent's own bindings)
+parent.db;             // resolved from base (inherited)
+'db' in parent;        // true  (inherited)
+[...parent.inspect().providers] // only 'extra'
+```
+
+---
+
+## Known typing limitations
+
+Two limitations exist today. The runtime works correctly in both cases; only the TypeScript types are affected.
+
+**1. Self-referencing in `scope()`** — a factory cannot reference a key added in the same `scope()` call:
+
+```typescript
+// ✗ TypeScript error — 'requestId' not yet visible in c at this call site
+app.scope({
+  requestId: () => crypto.randomUUID(),
+  handler: (c) => new Handler(c.requestId), // c doesn't include 'requestId' here
+});
+
+// ✓ Split into two scope() calls
+const s1 = app.scope({ requestId: () => crypto.randomUUID() });
+const s2 = s1.scope({ handler: (c) => new Handler(c.requestId) });
+```
+
+Root cause: making `E` auto-referential in the `scope()` generic collapses all `ReturnType<E[K]>` to `unknown`.
+
+**2. `.merge()` prerequisites** — `.merge()` is designed for modules with no prerequisites. A standalone builder starts from `TBuilt = {}`, so its factories cannot declare dependencies on keys from the host. Use `defineModule<TDeps>()` instead:
+
+```typescript
+// ✗ Type error — 'logger' not in the standalone builder's TBuilt
+const withLog = container().add('repo', (c) => new Repo(c.logger));
+
+// ✓ Use defineModule to declare prereqs
+const repoModule = defineModule<{ logger: Logger }>()((b) =>
+  b.add('repo', (c) => new Repo(c.logger)),
+);
+```
+
 ---
 
 ## Errors & Diagnostics
@@ -514,7 +570,7 @@ app.userServce; // typo
 //   hint: Add 'userServce' to your container, or fix the typo.
 ```
 
-Powered by Levenshtein distance (≥ 50% similarity threshold).
+Powered by Levenshtein distance. Default threshold: 50% similarity — configurable via `container({ similarityThreshold: 0.8 })`. Set to `1` to require an exact match (disables suggestions).
 
 ### Circular dependency — full chain
 
@@ -527,7 +583,7 @@ No stack overflow, no cryptic crash — just the resolution chain.
 
 ### Reserved keys
 
-`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString` cannot be used as dependency keys.
+`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size` cannot be used as dependency keys.
 
 ```typescript
 container().add('inspect', () => 'foo');
@@ -583,6 +639,7 @@ For **intentional** overrides (test doubles, plugins, environment-specific bindi
 | `CircularDependencyError` | Cycle detected during resolution |
 | `UndefinedReturnError` | Factory returned `undefined` |
 | `FactoryError` | Factory threw (wraps original error) |
+| `TopologicalSortError` | Topological sort in `preload()` could not complete (defensive guard — cycle detection via `CircularDependencyError` normally fires first) |
 | `ScopeMismatchWarning` | Singleton depends on transient (surfaced via `health().warnings`). Carries `hint` with refactor suggestions. |
 | `AsyncInitErrorWarning` | Async `onInit()` rejected during lazy access (surfaced via `health().warnings`). Carries `hint` pointing to `preload()`. |
 
@@ -607,7 +664,7 @@ For **intentional** overrides (test doubles, plugins, environment-specific bindi
 
 | Export | Kind | Description |
 |---|---|---|
-| `container<T?>()` | function | Creates a `ContainerBuilder`. Pass `T` for [Contract Mode](#contract-mode-single-file-containers). |
+| `container<T?>(options?)` | function | Creates a `ContainerBuilder`. Pass `T` for [Contract Mode](#contract-mode-single-file-containers). `options?: ContainerOptions` — e.g. `container({ similarityThreshold: 0.8 })`. |
 | `ContainerBuilder` | class | Fluent builder class (rarely instantiated directly — `container()` is the entry point). Exported for type-only use and advanced composition. |
 | `defineModule<TDeps?>()(fn)` | function | Defines a typed reusable module. See [Modules reference](#modules-reference). |
 | `transient(factory)` | function | Marks a factory as transient (for `scope()` / `extend()`). |
@@ -647,7 +704,9 @@ For **intentional** overrides (test doubles, plugins, environment-specific bindi
 | `AppDeps` | Augmentable global interface for Pinia-style typing. |
 | `Container<T>` | `T & IContainer<T>` — resolved deps + container methods. |
 | `ContainerBuilder<TContract, TBuilt>` | Fluent builder (also passed to `module()` callbacks). |
-| `IContainer<T>` | Container methods interface. |
+| `IContainer<T>` | Container methods interface (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toJSON`, `size`, `[Symbol.iterator]`, `[Symbol.asyncDispose]`). |
+| `IContainerBuilder<TContract, TBuilt>` | Domain-level builder interface (used in `module()` / `defineModule()` callbacks). |
+| `ContainerOptions` | `{ similarityThreshold?: number }` — options for `container()`. Controls the fuzzy suggestion threshold in `ProviderNotFoundError` (default `0.5`, range 0–1). Propagated through `scope()`, `extend()`, and `module()`. |
 | `Module<TDeps, TBuilt>` | Module shape returned by `defineModule()`. |
 | `InferModuleDeps<M>` / `InferModuleBuilt<M>` | Extract a module's prereqs / full output. |
 | `Factory<T>` | Raw factory signature `(c: unknown) => T`. |
@@ -671,7 +730,7 @@ src/
     types.ts                     # barrel re-exporting types/public.ts + types/internal.ts
     types/public.ts              # Container, IContainer, IContainerBuilder, AppDeps, helpers
     types/internal.ts            # IResolver, ICycleDetector, IDependencyTracker, IValidator
-    errors.ts                    # 7 error classes + 2 warnings, each with hint + details
+    errors.ts                    # 9 error classes (ContainerError abstract + 8 concrete) + 2 warnings, each with hint + details
     lifecycle.ts                 # OnInit / OnDestroy (duck-typed)
     validation.ts                # Validator (configurable similarity threshold), Levenshtein
   infrastructure/                # mechanisms — depends on domain/ only
