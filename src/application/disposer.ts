@@ -13,13 +13,18 @@ export class Disposer {
     const entries = [...cache.entries()].reverse();
     const errors: unknown[] = [];
 
+    // Shared across `extend()` siblings, which copy the cache and thus share instances.
+    // Marked before the call so a throwing `onDestroy()` still never runs twice.
+    const destroyed = this.resolver.getDestroyedInstances();
+
     for (const [, instance] of entries) {
-      if (hasOnDestroy(instance)) {
-        try {
-          await instance.onDestroy();
-        } catch (error) {
-          errors.push(error);
-        }
+      if (!hasOnDestroy(instance)) continue;
+      if (destroyed.has(instance)) continue;
+      destroyed.add(instance);
+      try {
+        await instance.onDestroy();
+      } catch (error) {
+        errors.push(error);
       }
     }
 

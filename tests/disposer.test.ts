@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { Disposer } from '../src/application/disposer.js';
 import type { IResolver } from '../src/domain/types.js';
 
-function createMockResolver(cache: Map<string, unknown>): IResolver {
+function createMockResolver(
+  cache: Map<string, unknown>,
+  destroyed: WeakSet<object> = new WeakSet(),
+): IResolver {
   return {
     getCache: () => cache,
+    getDestroyedInstances: () => destroyed,
     clearAllInitState: vi.fn(),
     clearAllDepGraph: vi.fn(),
     clearWarnings: vi.fn(),
@@ -131,5 +135,63 @@ describe('Disposer', () => {
 
     const disposer = new Disposer(createMockResolver(cache));
     await disposer.dispose(); // should not throw
+  });
+
+  it('skips instances already present in the destroyed set', async () => {
+    const destroyed = new WeakSet<object>();
+    const instance = { onDestroy: vi.fn() };
+    destroyed.add(instance);
+
+    const cache = new Map<string, unknown>([['svc', instance]]);
+    const disposer = new Disposer(createMockResolver(cache, destroyed));
+    await disposer.dispose();
+
+    expect(instance.onDestroy).not.toHaveBeenCalled();
+  });
+
+  it('adds instance to the destroyed set before calling onDestroy', async () => {
+    const destroyed = new WeakSet<object>();
+    let wasInSetDuringCall = false;
+    const instance = {
+      onDestroy: vi.fn(() => {
+        wasInSetDuringCall = destroyed.has(instance);
+      }),
+    };
+
+    const cache = new Map<string, unknown>([['svc', instance]]);
+    const disposer = new Disposer(createMockResolver(cache, destroyed));
+    await disposer.dispose();
+
+    expect(wasInSetDuringCall).toBe(true);
+    expect(instance.onDestroy).toHaveBeenCalledOnce();
+  });
+
+  it('two disposers sharing a destroyed set run onDestroy once', async () => {
+    const destroyed = new WeakSet<object>();
+    const instance = { onDestroy: vi.fn() };
+
+    const first = new Disposer(createMockResolver(new Map([['svc', instance]]), destroyed));
+    const second = new Disposer(createMockResolver(new Map([['svc', instance]]), destroyed));
+
+    await first.dispose();
+    await second.dispose();
+
+    expect(instance.onDestroy).toHaveBeenCalledOnce();
+  });
+
+  it('a throwing onDestroy is still not retried by a sibling disposer', async () => {
+    const destroyed = new WeakSet<object>();
+    const instance = {
+      onDestroy: vi.fn(() => {
+        throw new Error('boom');
+      }),
+    };
+
+    const first = new Disposer(createMockResolver(new Map([['svc', instance]]), destroyed));
+    const second = new Disposer(createMockResolver(new Map([['svc', instance]]), destroyed));
+
+    await expect(first.dispose()).rejects.toThrow('boom');
+    await expect(second.dispose()).resolves.toBeUndefined();
+    expect(instance.onDestroy).toHaveBeenCalledOnce();
   });
 });

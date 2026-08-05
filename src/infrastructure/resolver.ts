@@ -23,6 +23,8 @@ export interface ResolverDeps {
   parent?: Resolver;
   name?: string;
   initCalled?: Set<string>;
+  /** Shared across a base resolver and all its `.extend()` descendants to prevent double onDestroy(). */
+  destroyedInstances?: WeakSet<object>;
   cycleDetector: ICycleDetector;
   dependencyTracker: IDependencyTracker;
   validator: IValidator;
@@ -44,6 +46,7 @@ export class Resolver implements IResolver {
   private readonly name?: string;
   private readonly cycleDetector: ICycleDetector;
   private readonly dependencyTracker: IDependencyTracker;
+  private readonly destroyedInstances: WeakSet<object>;
 
   constructor(deps: ResolverDeps) {
     this.factories = deps.factories;
@@ -51,6 +54,7 @@ export class Resolver implements IResolver {
     this.parent = deps.parent;
     this.name = deps.name;
     this.initCalled = deps.initCalled ? new Set(deps.initCalled) : new Set();
+    this.destroyedInstances = deps.destroyedInstances ?? new WeakSet();
     this.cycleDetector = deps.cycleDetector;
     this.dependencyTracker = deps.dependencyTracker;
     this.validator = deps.validator;
@@ -261,6 +265,14 @@ export class Resolver implements IResolver {
 
   getInitCalled(): Set<string> {
     return this.initCalled;
+  }
+
+  /**
+   * Exposes the shared destroyed-instances set so `Extender` can propagate it
+   * to the new resolver and `Disposer` can guard against double `onDestroy()`.
+   */
+  getDestroyedInstances(): WeakSet<object> {
+    return this.destroyedInstances;
   }
 
   /** Look up a factory in this resolver or its parent chain. */

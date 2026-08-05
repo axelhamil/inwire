@@ -90,6 +90,99 @@ describe('extend', () => {
     expect(() => base.extend({ bad: 'not a function' } as any)).toThrow();
   });
 
+  describe('dispose across extend() siblings', () => {
+    it('does not call onDestroy twice when ext is disposed before root', async () => {
+      let destroyed = 0;
+      const root = container()
+        .add('svc', () => ({
+          onDestroy() {
+            destroyed++;
+          },
+        }))
+        .build();
+      root.svc;
+      const ext = root.extend({ other: () => 1 });
+      await ext.dispose();
+      await root.dispose();
+      expect(destroyed).toBe(1);
+    });
+
+    it('does not call onDestroy twice when root is disposed before ext', async () => {
+      let destroyed = 0;
+      const root = container()
+        .add('svc', () => ({
+          onDestroy() {
+            destroyed++;
+          },
+        }))
+        .build();
+      root.svc;
+      const ext = root.extend({ other: () => 1 });
+      await root.dispose();
+      await ext.dispose();
+      expect(destroyed).toBe(1);
+    });
+
+    it('handles chained extends — one onDestroy per instance across all siblings', async () => {
+      let destroyed = 0;
+      const root = container()
+        .add('svc', () => ({
+          onDestroy() {
+            destroyed++;
+          },
+        }))
+        .build();
+      root.svc;
+      const ext1 = root.extend({ a: () => 1 });
+      const ext2 = ext1.extend({ b: () => 2 });
+      await root.dispose();
+      await ext1.dispose();
+      await ext2.dispose();
+      expect(destroyed).toBe(1);
+    });
+
+    it('extended-only instances are still destroyed by their own container', async () => {
+      let rootDestroyed = 0;
+      let extDestroyed = 0;
+      const root = container()
+        .add('rootSvc', () => ({
+          onDestroy() {
+            rootDestroyed++;
+          },
+        }))
+        .build();
+      root.rootSvc;
+      const ext = root.extend({
+        extSvc: () => ({
+          onDestroy() {
+            extDestroyed++;
+          },
+        }),
+      });
+      ext.extSvc;
+      await ext.dispose();
+      await root.dispose();
+      expect(rootDestroyed).toBe(1);
+      expect(extDestroyed).toBe(1);
+    });
+
+    it('instance not yet resolved before extend is still destroyable exactly once', async () => {
+      let destroyed = 0;
+      const root = container()
+        .add('lazy', () => ({
+          onDestroy() {
+            destroyed++;
+          },
+        }))
+        .build();
+      const ext = root.extend({ extra: () => 42 });
+      ext.lazy; // resolved through ext, lands in ext's copied cache
+      await ext.dispose();
+      await root.dispose();
+      expect(destroyed).toBe(1);
+    });
+  });
+
   describe('scope vs extend differences', () => {
     it('scope creates parent-child chain, extend creates flat merge', () => {
       let parentCallCount = 0;
