@@ -16,13 +16,17 @@ export class DependencyTracker implements IDependencyTracker {
     chain: string[],
     resolve: (key: string, chain: string[]) => unknown,
   ): unknown {
+    const seen = new Set<string>();
     return new Proxy(
       {},
       {
         get: (_target, prop) => {
           if (typeof prop === 'symbol') return undefined;
           const depKey = prop as string;
-          deps.push(depKey);
+          if (!seen.has(depKey)) {
+            seen.add(depKey);
+            deps.push(depKey);
+          }
           return resolve(depKey, chain);
         },
       },
