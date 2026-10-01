@@ -120,3 +120,55 @@ describe('targeted dispose(...keys)', () => {
     expect(end).toHaveBeenCalledOnce();
   });
 });
+
+describe('reads during teardown', () => {
+  it('serves cached bindings to work still draining in a dispose hook', async () => {
+    let drained: string | undefined;
+    const app = container()
+      .add('users', () => ({ find: () => 'alice' }))
+      .add(
+        'server',
+        (c) => ({
+          // Handlers read their dependencies lazily, like a real HTTP server.
+          handle: () => c.users.find(),
+        }),
+        {
+          dispose: async (server) => {
+            await Promise.resolve();
+            drained = server.handle();
+          },
+        },
+      )
+      .build();
+    void app.users;
+    void app.server;
+
+    await app.dispose();
+
+    expect(drained).toBe('alice');
+    expect(() => app.users).toThrow(ContainerDisposedError);
+  });
+
+  it('never runs a factory during teardown', async () => {
+    const lateFactory = vi.fn(() => 'late');
+    let error: unknown;
+    const app = container()
+      .add('late', lateFactory)
+      .add('server', (c) => ({ read: () => c.late }), {
+        dispose: (server) => {
+          try {
+            server.read();
+          } catch (e) {
+            error = e;
+          }
+        },
+      })
+      .build();
+    void app.server;
+
+    await app.dispose();
+
+    expect(error).toBeInstanceOf(ContainerDisposedError);
+    expect(lateFactory).not.toHaveBeenCalled();
+  });
+});

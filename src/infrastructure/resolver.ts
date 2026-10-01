@@ -68,14 +68,15 @@ export class Resolver implements IResolver {
   }
 
   resolve(key: string, chain: string[] = []): unknown {
-    if (this.disposed || this.disposedKeys.has(key)) throw new ContainerDisposedError(key);
-
     const factory = this.factories.get(key);
 
-    // Fast path: singleton cache hit.
+    // Fast path: singleton cache hit. Stays open while dispose() runs its hooks, so
+    // work they drain can still read live instances; the cache is cleared right after.
     if (factory && !isTransient(factory) && this.cache.has(key)) {
       return this.cache.get(key);
     }
+
+    if (this.disposed || this.disposedKeys.has(key)) throw new ContainerDisposedError(key);
 
     // No local factory: walk parent chain or throw with fuzzy suggestion.
     if (!factory) return this.delegateToParentOrThrow(key, chain);
