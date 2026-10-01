@@ -1,4 +1,4 @@
-import { DuplicateKeyError, ReservedKeyError } from '../domain/errors.js';
+import { DuplicateKeyError, ProviderNotFoundError, ReservedKeyError } from '../domain/errors.js';
 import type {
   AddBuilt,
   BindingOptions,
@@ -75,6 +75,40 @@ export class ContainerBuilder<
     this.validateKey(key);
     this.factories.set(key, markTransient(factory as Factory));
     return this as unknown as ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
+  }
+
+  /**
+   * Replaces a registered binding before the container is built, typically in tests.
+   * Every dependent, direct or not, receives the replacement, since nothing has been
+   * resolved yet. The binding keeps its type: the replacement must be assignable to it.
+   * Throws `ProviderNotFoundError` for a key that is not registered.
+   *
+   * The original `dispose` hook is dropped with the original factory; pass `options`
+   * to give the replacement its own.
+   *
+   * @example
+   * ```typescript
+   * const app = createApp() // returns the builder, before .build()
+   *   .override('db', new InMemoryDb())
+   *   .override('mailer', () => ({ send: async () => {} }))
+   *   .build();
+   * ```
+   */
+  override<K extends string & keyof TBuilt>(
+    key: K,
+    factoryOrInstance: ((c: TBuilt) => TBuilt[K]) | TBuilt[K],
+    options?: BindingOptions<TBuilt[K]>,
+  ): ContainerBuilder<TContract, TBuilt> {
+    if (!this.factories.has(key)) {
+      const registered = [...this.factories.keys()];
+      const suggestion = new Validator(this.options.similarityThreshold).suggestKey(
+        key,
+        registered,
+      );
+      throw new ProviderNotFoundError(key, [], registered, suggestion);
+    }
+    this.factories.set(key, toFactory(factoryOrInstance, options));
+    return this;
   }
 
   /**

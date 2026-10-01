@@ -337,6 +337,13 @@ export interface IContainerBuilder<
     factory: (c: TBuilt) => V,
   ): IContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
 
+  /** Replaces a registered binding before build (test doubles); every dependent receives it. */
+  override<K extends string & keyof TBuilt>(
+    key: K,
+    factoryOrInstance: ((c: TBuilt) => TBuilt[K]) | TBuilt[K],
+    options?: BindingOptions<TBuilt[K]>,
+  ): IContainerBuilder<TContract, TBuilt>;
+
   /**
    * Applies a module. Its prerequisites must already be on this builder and the keys
    * it provides must be new: both are checked at compile time.
