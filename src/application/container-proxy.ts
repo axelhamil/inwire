@@ -1,13 +1,10 @@
 import type { Container, IValidator, ScopeOptions } from '../domain/types.js';
-import { Validator } from '../domain/validation.js';
 import type { Resolver } from '../infrastructure/resolver.js';
 import { Disposer } from './disposer.js';
 import { Extender } from './extender.js';
 import { Introspection } from './introspection.js';
 import { Preloader } from './preloader.js';
 import { Scoper } from './scoper.js';
-
-const defaultValidator = new Validator();
 
 /**
  * Wraps a {@link Resolver} in the user-facing ES Proxy:
@@ -23,8 +20,8 @@ const defaultValidator = new Validator();
  */
 export function buildContainerProxy(
   resolver: Resolver,
-  builderFactory?: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
-  validator: IValidator = defaultValidator,
+  builderFactory: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
+  validator: IValidator,
 ): Container<Record<string, unknown>> {
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
@@ -40,9 +37,9 @@ export function buildContainerProxy(
       buildContainerProxy(extender.extend(resolver, extra), builderFactory, validator),
 
     module: (fn: (b: unknown) => unknown) => {
-      if (!builderFactory) throw new Error('module() is not available');
-      const builder = builderFactory();
-      const result = fn(builder) as { _toRecord(): Record<string, (c: unknown) => unknown> };
+      const result = fn(builderFactory()) as {
+        _toRecord(): Record<string, (c: unknown) => unknown>;
+      };
       return methods.extend(result._toRecord());
     },
 
