@@ -170,6 +170,7 @@ export class ContainerBuilder<
       resolver,
       () => new ContainerBuilder(this.options),
       validator,
+      this.options.disposeTimeout,
     ) as Container<TBuilt>;
   }
 

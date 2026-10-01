@@ -1,3 +1,4 @@
+import { DisposeTimeoutError } from '../domain/errors.js';
 import { hasOnDestroy } from '../domain/lifecycle.js';
 import type { IResolver } from '../domain/types.js';
 import { bindingMeta } from '../infrastructure/binding.js';
@@ -9,7 +10,10 @@ import { bindingMeta } from '../infrastructure/binding.js';
  * Collects errors, clears all state.
  */
 export class Disposer {
-  constructor(private readonly resolver: IResolver) {}
+  constructor(
+    private readonly resolver: IResolver,
+    private readonly timeout?: number,
+  ) {}
 
   /**
    * Without keys, tears down the whole container. With keys, tears down only those
@@ -32,7 +36,7 @@ export class Disposer {
         destroyed.add(instance);
       }
       try {
-        await teardown();
+        await this.settle(key, teardown);
       } catch (error) {
         errors.push(error);
       }
@@ -43,6 +47,25 @@ export class Disposer {
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) {
       throw new AggregateError(errors, `dispose() encountered ${errors.length} errors`);
+    }
+  }
+
+  /** Awaits `teardown`, or gives up with a `DisposeTimeoutError` after `timeout` ms. */
+  private async settle(key: string, teardown: () => unknown): Promise<void> {
+    const timeout = this.timeout;
+    if (timeout === undefined) {
+      await teardown();
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new DisposeTimeoutError(key, timeout)), timeout);
+    });
+    try {
+      await Promise.race([teardown(), expired]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

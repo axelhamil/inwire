@@ -22,19 +22,30 @@ export function buildContainerProxy(
   resolver: Resolver,
   builderFactory: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
   validator: IValidator,
+  disposeTimeout?: number,
 ): Container<Record<string, unknown>> {
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
-  const disposer = new Disposer(resolver);
+  const disposer = new Disposer(resolver, disposeTimeout);
   const scoper = new Scoper(validator);
   const extender = new Extender(validator);
 
   const methods = {
     scope: (extra: Record<string, (c: unknown) => unknown>, options?: ScopeOptions) =>
-      buildContainerProxy(scoper.scope(resolver, extra, options), builderFactory, validator),
+      buildContainerProxy(
+        scoper.scope(resolver, extra, options),
+        builderFactory,
+        validator,
+        disposeTimeout,
+      ),
 
     extend: (extra: Record<string, (c: unknown) => unknown>) =>
-      buildContainerProxy(extender.extend(resolver, extra), builderFactory, validator),
+      buildContainerProxy(
+        extender.extend(resolver, extra),
+        builderFactory,
+        validator,
+        disposeTimeout,
+      ),
 
     module: (fn: (b: unknown) => unknown) => {
       const result = fn(builderFactory()) as {

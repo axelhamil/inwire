@@ -236,6 +236,28 @@ export class ContainerDisposedError extends ContainerError {
 }
 
 /**
+ * Reported by `dispose()` when a teardown hook (`onDestroy()` or the binding's
+ * `dispose`) does not settle within `disposeTimeout` ms. The other hooks still run.
+ *
+ * @example
+ * ```typescript
+ * const app = container({ disposeTimeout: 5000 }).add('db', () => new Db()).build();
+ * await app.dispose();
+ * // DisposeTimeoutError: Teardown of 'db' did not settle within 5000 ms.
+ * ```
+ */
+export class DisposeTimeoutError extends ContainerError {
+  readonly hint: string;
+  readonly details: { key: string; timeout: number };
+
+  constructor(key: string, timeout: number) {
+    super(`Teardown of '${key}' did not settle within ${timeout} ms.`);
+    this.hint = `Make the teardown of '${key}' settle faster (close idle connections, stop pending work), or raise disposeTimeout.`;
+    this.details = { key, timeout };
+  }
+}
+
+/**
  * Warning emitted when a singleton depends on a transient dependency.
  * The transient value gets frozen inside the singleton — almost always a bug.
  *

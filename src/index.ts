@@ -30,6 +30,7 @@ export {
   ContainerConfigError,
   ContainerDisposedError,
   ContainerError,
+  DisposeTimeoutError,
   DuplicateKeyError,
   FactoryError,
   ProviderNotFoundError,

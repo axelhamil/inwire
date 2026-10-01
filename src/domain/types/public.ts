@@ -200,6 +200,20 @@ export interface ContainerOptions {
    * ```
    */
   similarityThreshold?: number;
+
+  /**
+   * Maximum time, in ms, `dispose()` waits for each teardown hook (`onDestroy()` or a
+   * binding's `dispose`). A hook still pending after it is reported as a
+   * {@link DisposeTimeoutError} and the next hooks run, so one hung connection cannot
+   * block a graceful shutdown. Unset by default: every hook is awaited.
+   * Propagated through `scope()`, `extend()` and `module()`.
+   *
+   * @example
+   * ```typescript
+   * const app = container({ disposeTimeout: 5_000 }).build();
+   * ```
+   */
+  disposeTimeout?: number;
 }
 
 /**
