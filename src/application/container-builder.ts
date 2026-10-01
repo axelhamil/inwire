@@ -7,6 +7,8 @@ import type {
   Factory,
   FactoryOrInstance,
   IContainerBuilder,
+  ModuleCheck,
+  ModuleProvides,
   NonReservedKey,
   Override,
 } from '../domain/types.js';
@@ -74,26 +76,46 @@ export class ContainerBuilder<
   }
 
   /**
-   * Applies a module — a function that chains `.add()` calls on this builder.
+   * Applies a module, typically one made with {@link defineModule}.
    *
-   * `TDepsM` (the module's expected prereqs) is inferred independently from the
-   * builder's current `TBuilt`. Prereq satisfaction is NOT enforced at the type
-   * level on purpose: in global mode (`defineModule()` typed against `AppDeps`)
-   * the prereq surface is the full app, never the partial builder state. The
-   * runtime guarantees correctness via `ProviderNotFoundError` if a key is
-   * missing at resolution time.
+   * Checked at compile time for modules with explicit prerequisites
+   * (`defineModule<{ db: Db }>()`):
+   * - every prerequisite must already be on this builder with a compatible type,
+   *   otherwise the error names the missing keys (`'missing prerequisites': 'db'`);
+   * - the keys the module provides must be new (`'duplicate keys': 'users'`),
+   *   which `.add()` would reject at runtime anyway with `DuplicateKeyError`.
+   *
+   * Only the keys the module adds join the builder type: the host keeps its own,
+   * more precise, types for the prerequisites.
+   *
+   * Global-mode modules (`defineModule()` typed against `AppDeps`) skip the check:
+   * their prerequisites are the whole app, complete only once every module is added.
+   * A key still missing at that point raises `ProviderNotFoundError` on resolution.
+   *
+   * @example
+   * ```typescript
+   * const usersModule = defineModule<{ db: Db }>()((b) =>
+   *   b.add('users', (c) => new UserService(c.db)),
+   * );
+   *
+   * container().add('db', () => new PgDb()).addModule(usersModule); // ok
+   * container().addModule(usersModule); // error: 'missing prerequisites': 'db'
+   * ```
    */
   addModule<
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TDepsM extends Record<string, any>,
+    TDepsM extends Record<string, any> = TBuilt,
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TNew extends Record<string, any>,
+    TNew extends Record<string, any> = TBuilt,
   >(
-    module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
-  ): ContainerBuilder<TContract, Override<TBuilt, TNew>> {
+    module: ((
+      builder: IContainerBuilder<TContract, TDepsM>,
+    ) => IContainerBuilder<TContract, TNew>) &
+      ModuleCheck<TBuilt, TDepsM, TNew>,
+  ): ContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>> {
     return module(
       this as unknown as IContainerBuilder<TContract, TDepsM>,
-    ) as unknown as ContainerBuilder<TContract, Override<TBuilt, TNew>>;
+    ) as unknown as ContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>>;
   }
 
   /**

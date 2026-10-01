@@ -14,11 +14,79 @@
 export type Factory<T = unknown> = (container: unknown) => T;
 
 /**
- * Utility: `T` with keys of `U` overridden by `U` — avoids the `A & A → never`
+ * Utility: flattens an intersection into a single object type, so hovers show
+ * `{ db: Db; users: Users }` instead of a chain of `Omit<…> & Record<…>`.
+ */
+export type Simplify<T> = { [K in keyof T]: T[K] } & {};
+
+/**
+ * Utility: `T` with keys of `U` overridden by `U`. Avoids the `A & A → never`
  * collapse when classes have private members and the same key is declared on
  * both sides (e.g. global `AppDeps` + module `.add()`).
  */
-export type Override<T, U> = Omit<T, keyof U> & U;
+export type Override<T, U> = Simplify<Omit<T, keyof U> & U>;
+
+/**
+ * `true` when `TDeps` is the global {@link AppDeps} interface, i.e. the module was
+ * declared with `defineModule()` and no explicit prerequisites.
+ */
+type IsAppDeps<TDeps> = [TDeps] extends [AppDeps]
+  ? [AppDeps] extends [TDeps]
+    ? true
+    : false
+  : false;
+
+/** Prerequisite keys of a module that the host lacks or provides with an incompatible type. */
+type UnmetPrerequisites<THost, TDeps> = keyof TDeps extends infer K
+  ? K extends keyof TDeps
+    ? K extends keyof THost
+      ? THost[K] extends TDeps[K]
+        ? never
+        : K
+      : K
+    : never
+  : never;
+
+/**
+ * Keys provided twice. Keys declared in `AppDeps` are left to the runtime
+ * `DuplicateKeyError`: a global-mode module types the host with the whole `AppDeps`
+ * surface, so their presence in the host type says nothing about what was added.
+ */
+type DuplicateKeys<THost, TProvided> = Exclude<
+  Extract<keyof TProvided, keyof THost>,
+  keyof AppDeps
+>;
+
+/**
+ * Bindings a module adds to its host. A module typed against explicit prerequisites
+ * provides only the keys it adds; a global-mode module (typed against `AppDeps`)
+ * exposes the whole `AppDeps` surface, which is what its forward references rely on.
+ */
+export type ModuleProvides<TDeps, TBuilt> =
+  IsAppDeps<TDeps> extends true ? TBuilt : Omit<TBuilt, keyof TDeps>;
+
+/**
+ * Compile-time gate of `.addModule()`. Resolves to `unknown` (no constraint) when the
+ * host satisfies the module, otherwise to an object type whose property names the
+ * offending keys, so the compiler error reads
+ * `Property '"missing prerequisites"' is missing … { "missing prerequisites": "db" }`.
+ *
+ * Global-mode modules are exempt: their prerequisites are the whole app, which is
+ * only complete once every module is added.
+ */
+export type ModuleCheck<THost, TDeps, TBuilt> =
+  IsAppDeps<TDeps> extends true
+    ? unknown
+    : // `infer` forces evaluation, so the error prints `"db"` rather than the alias name.
+      UnmetPrerequisites<THost, TDeps> extends infer Missing
+      ? [Missing] extends [never]
+        ? DuplicateKeys<THost, Omit<TBuilt, keyof TDeps>> extends infer Duplicate
+          ? [Duplicate] extends [never]
+            ? unknown
+            : { 'duplicate keys': Duplicate }
+          : never
+        : { 'missing prerequisites': Missing }
+      : never;
 
 /**
  * Reserved method names on the container that cannot be used as dependency keys.
@@ -224,15 +292,21 @@ export interface IContainerBuilder<
     factory: (c: TBuilt) => V,
   ): IContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
 
-  /** Applies a module — a function that chains `.add()` calls on this builder. */
+  /**
+   * Applies a module. Its prerequisites must already be on this builder and the keys
+   * it provides must be new: both are checked at compile time.
+   */
   addModule<
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TDepsM extends Record<string, any>,
+    TDepsM extends Record<string, any> = TBuilt,
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TNew extends Record<string, any>,
+    TNew extends Record<string, any> = TBuilt,
   >(
-    module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
-  ): IContainerBuilder<TContract, Override<TBuilt, TNew>>;
+    module: ((
+      builder: IContainerBuilder<TContract, TDepsM>,
+    ) => IContainerBuilder<TContract, TNew>) &
+      ModuleCheck<TBuilt, TDepsM, TNew>,
+  ): IContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>>;
 
   /** Merges a standalone builder's factories into this one. */
   merge<TOther extends Record<string, unknown>>(
