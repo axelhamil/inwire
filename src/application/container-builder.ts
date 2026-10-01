@@ -25,9 +25,12 @@ import { buildContainerProxy } from './container-proxy.js';
 /**
  * Fluent builder that constructs a typed DI container incrementally.
  *
+ * Return it, unbuilt, from your composition root (`createApi()`): the app calls
+ * `.build()`, tests call `.override(...)` first.
+ *
  * Two modes, one class:
- * - `container<AppDeps>()` — contract mode: keys restricted to `keyof AppDeps`, return types constrained
- * - `container()` — free mode: keys are any `string`, types inferred freely
+ * - `container<AppDeps>()`: contract mode: keys restricted to `keyof AppDeps`, return types constrained
+ * - `container()`: free mode: keys are any `string`, types inferred freely
  *
  * Each `.add()` call accumulates the type so that subsequent factories
  * receive a fully-typed `c` parameter with all previously registered deps.
@@ -47,7 +50,7 @@ export class ContainerBuilder<
   }
 
   /**
-   * Registers a dependency — factory (lazy) or instance (eager).
+   * Registers a dependency: factory (lazy) or instance (eager).
    *
    * Convention: `typeof value === 'function'` → factory. Otherwise → instance (wrapped in `() => value`).
    * To register a function as a value: `add('fn', () => myFunction)`.
@@ -167,9 +170,9 @@ export class ContainerBuilder<
    *
    * Cross-builder dependencies are resolved at build time. Reserved keys throw.
    *
-   * Duplicate keys do NOT throw here: the merged builder wins (last write wins), which
-   * is what makes `.merge()` usable for overriding a module in tests. `.add()` is the
-   * strict path — it throws `DuplicateKeyError`.
+   * Duplicate keys do NOT throw here: the merged builder wins (last write wins).
+   * `.add()` is the strict path: it throws `DuplicateKeyError`. To replace a single
+   * binding in tests, prefer `.override()`, which checks the key and the type.
    */
   merge<TOther extends Record<string, unknown>>(
     other: ContainerBuilder<Record<string, unknown>, TOther>,
@@ -237,6 +240,9 @@ function toFactory<V>(value: unknown, options: BindingOptions<V> = {}): Factory 
 
 /**
  * Creates a new container builder.
+ *
+ * `options` tunes the fuzzy "Did you mean" suggestions (`similarityThreshold`) and
+ * bounds each teardown hook of `dispose()` (`disposeTimeout`, in ms).
  *
  * @example Contract mode (interface-first):
  * ```typescript

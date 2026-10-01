@@ -11,7 +11,7 @@ import { isTransient } from '../infrastructure/transient.js';
  * Builds introspection data from a Resolver instance.
  * Provides `inspect()`, `describe()`, `health()`, and `toString()`.
  *
- * **Scope semantics**: methods report **only local** bindings — they do NOT
+ * **Scope semantics**: methods report **only local** bindings, they do NOT
  * walk the parent chain. This is intentional and pinned by tests: `scope()`
  * is an isolation primitive, so `child.health()` describes the child's own
  * view, not the merged tree. Use `extend()` if you want a flat merged

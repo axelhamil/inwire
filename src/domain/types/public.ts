@@ -1,5 +1,5 @@
 /**
- * Public types — everything users see and consume from `import 'inwire'`.
+ * Public types: everything users see and consume from `import 'inwire'`.
  * No internal collaborator interfaces here (those live in `./internal.ts`).
  */
 
@@ -121,7 +121,7 @@ export type BuilderKey<TContract> = string & keyof TContract;
 export type NonReservedKey<K extends string> = K & (K extends ReservedKey ? never : K);
 
 /**
- * Argument type for `.add()` — accepts either a lazy factory or a non-function
+ * Argument type for `.add()`: accepts either a lazy factory or a non-function
  * eager instance. The `V extends Function ? never : V` clause excludes functions
  * from the instance variant (functions are always treated as factories).
  */
@@ -131,7 +131,7 @@ export type FactoryOrInstance<TBuilt, V> =
   | (V & (V extends Function ? never : V));
 
 /**
- * Resulting `TBuilt` after `.add(key, value)` — same as `Override<TBuilt, Record<K, V>>`,
+ * Resulting `TBuilt` after `.add(key, value)`, same as `Override<TBuilt, Record<K, V>>`,
  * just named for readability.
  */
 export type AddBuilt<TBuilt, K extends string, V> = Override<TBuilt, Record<K, V>>;
@@ -161,7 +161,7 @@ export interface BindingOptions<V> {
  * Global, augmentable interface describing the application's dependency shape.
  *
  * Empty by default. Each module file augments it with the bindings IT provides,
- * enabling **cross-module forward references** in factories — `c.X` resolves
+ * enabling **cross-module forward references** in factories: `c.X` resolves
  * even when `X` is added by another module loaded later.
  *
  * @example Augment from a module file:
@@ -175,10 +175,10 @@ export interface BindingOptions<V> {
  * ```
  *
  * When `defineModule()` is called without an explicit `<TDeps>` generic, the
- * builder's `c` parameter is typed as `AppDeps` — the union of every module's
+ * builder's `c` parameter is typed as `AppDeps`, the union of every module's
  * augmentations. TypeScript merges these declarations across files.
  */
-// biome-ignore lint/suspicious/noEmptyInterface: empty interface IS the augmentation surface — required so users can `declare module 'inwire' { interface AppDeps { ... } }`
+// biome-ignore lint/suspicious/noEmptyInterface: empty interface IS the augmentation surface, required so users can `declare module 'inwire' { interface AppDeps { ... } }`
 export interface AppDeps {}
 
 /**
@@ -186,7 +186,7 @@ export interface AppDeps {}
  */
 export interface ContainerOptions {
   /**
-   * Minimum similarity (0–1) for a registered key to be suggested as a
+   * Minimum similarity (0 to 1) for a registered key to be suggested as a
    * "Did you mean …?" fix in {@link ProviderNotFoundError}. Defaults to `0.5`.
    *
    * Raise it to only suggest near-identical keys, lower it to suggest more loosely.
@@ -253,6 +253,10 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   /**
    * Returns a new container with additional dependencies.
    * Existing singletons are shared. The original container is not modified.
+   *
+   * Sharing the cache means an already resolved binding is not replaced, and neither
+   * are the dependents that captured it. To swap a dependency in tests, use
+   * `.override()` on the builder before `build()`.
    */
   extend<E extends Record<string, (c: T) => unknown>>(
     extra: E,
@@ -296,10 +300,10 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
    */
   dispose(...keys: (keyof T)[]): Promise<void>;
 
-  /** ES2023 explicit resource management hook — alias of {@link IContainer.dispose}. */
+  /** ES2023 explicit resource management hook, alias of {@link IContainer.dispose}. */
   [Symbol.asyncDispose](): Promise<void>;
 
-  /** Returns a plain object of all currently resolved (cached) deps — does NOT trigger lazy resolution. Used by JSON.stringify. */
+  /** Returns a plain object of all currently resolved (cached) deps, does NOT trigger lazy resolution. Used by JSON.stringify. */
   toJSON(): Record<string, unknown>;
 
   /** Count of registered providers (factories), regardless of resolution state. */
@@ -313,7 +317,7 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
  * Domain-level contract of the fluent builder.
  *
  * The concrete `ContainerBuilder` class in `application/` implements this
- * structurally — keeping the dependency rule one-way (`domain ← application`).
+ * structurally, keeping the dependency rule one-way (`domain ← application`).
  * Consumers writing builder callbacks (e.g. inside `.module()` or `defineModule()`)
  * receive a value of this interface; they should never need the concrete class.
  */
@@ -324,7 +328,7 @@ export interface IContainerBuilder<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   TBuilt extends Record<string, any> = {},
 > {
-  /** Registers a dependency — factory (lazy) or instance (eager), with an optional `dispose` hook. */
+  /** Registers a dependency: factory (lazy) or instance (eager), with an optional `dispose` hook. */
   add<K extends BuilderKey<TContract>, V extends TContract[K]>(
     key: NonReservedKey<K>,
     factoryOrInstance: FactoryOrInstance<TBuilt, V>,

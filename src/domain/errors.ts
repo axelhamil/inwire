@@ -33,7 +33,7 @@ export abstract class ContainerError extends Error {
 
 /**
  * Thrown when a non-function value is passed in `scope()` or `extend()` deps.
- * (`.add()` accepts non-function values as eager instances — see {@link ContainerBuilder.add}.)
+ * (`.add()` accepts non-function values as eager instances, see {@link ContainerBuilder.add}.)
  *
  * @example
  * ```typescript
@@ -54,8 +54,9 @@ export class ContainerConfigError extends ContainerError {
 }
 
 /**
- * Thrown when a key is registered more than once on the same builder.
- * Use `.extend()` or `.scope()` for intentional overrides at runtime.
+ * Thrown when a key is registered more than once on the same builder, including by
+ * two modules (also a compile error for modules with explicit prerequisites).
+ * Use `.override()` on the builder to replace a binding on purpose.
  *
  * @example
  * ```typescript
@@ -259,7 +260,7 @@ export class DisposeTimeoutError extends ContainerError {
 
 /**
  * Warning emitted when a singleton depends on a transient dependency.
- * The transient value gets frozen inside the singleton — almost always a bug.
+ * The transient value gets frozen inside the singleton, almost always a bug.
  *
  * @example
  * ```typescript
@@ -314,7 +315,7 @@ export class AsyncInitErrorWarning implements ContainerWarning {
 
 /**
  * Thrown when the topological sort of the dependency graph cannot complete because
- * some keys remain unordered. In practice this is a defensive guard — `Resolver`
+ * some keys remain unordered. In practice this is a defensive guard: `Resolver`
  * detects cycles via `CircularDependencyError` before `topologicalLevels` is reached,
  * so this error is not reachable through the normal public API.
  *
@@ -332,7 +333,7 @@ export class TopologicalSortError extends ContainerError {
     super(`Topological sort incomplete: keys [${remaining.join(', ')}] could not be ordered.`);
     this.hint = [
       'A cycle exists among the listed keys. To debug:',
-      '  1. Access any affected key on the container — it will throw a CircularDependencyError with the full chain',
+      '  1. Access any affected key on the container: it will throw a CircularDependencyError with the full chain',
       '  2. Restructure the dependency graph to remove the cycle',
     ].join('\n');
     this.details = { remaining };

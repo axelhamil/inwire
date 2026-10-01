@@ -1,17 +1,25 @@
 /**
- * inwire — Type-safe dependency injection for TypeScript.
+ * inwire: type-safe dependency injection for TypeScript.
  * Zero ceremony, full inference, no decorators, no tokens. Built-in introspection for AI tooling.
  *
- * @example
+ * @example One module per business module, one composition root per app:
  * ```typescript
- * import { container, transient } from 'inwire';
+ * import { container, defineModule } from 'inwire';
  *
- * const app = container()
- *   .add('logger', () => new LoggerService())
- *   .add('db', (c) => new Database(c.logger))
- *   .build();
+ * // users.module.ts: declares what it consumes, checked by addModule()
+ * export const usersModule = defineModule<{ pool: Pool }>()((b) =>
+ *   b.add('users', (c) => new UserRepository(c.pool)),
+ * );
  *
- * app.db; // lazy, singleton, fully typed
+ * // api.ts: the composition root returns the builder, so tests can override()
+ * export const createApi = () =>
+ *   container({ disposeTimeout: 5_000 })
+ *     .add('pool', () => new Pool(), { dispose: (pool) => pool.end() })
+ *     .addModule(usersModule);
+ *
+ * const app = createApi().build();
+ * app.users; // lazy, singleton, fully typed
+ * process.on('SIGTERM', () => void app.dispose());
  * ```
  *
  * @packageDocumentation

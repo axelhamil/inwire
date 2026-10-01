@@ -32,7 +32,7 @@ export interface ResolverDeps {
 }
 
 /**
- * Core resolver — lazy singleton resolution with parent chain support.
+ * Core resolver: lazy singleton resolution with parent chain support.
  * Delegates cycle detection and dependency tracking to injected collaborators.
  */
 export class Resolver implements IResolver {
@@ -77,7 +77,7 @@ export class Resolver implements IResolver {
       return this.cache.get(key);
     }
 
-    // No local factory — walk parent chain or throw with fuzzy suggestion.
+    // No local factory: walk parent chain or throw with fuzzy suggestion.
     if (!factory) return this.delegateToParentOrThrow(key, chain);
 
     // Circular dependency guard.
@@ -109,7 +109,7 @@ export class Resolver implements IResolver {
 
   /**
    * Invokes the factory through a tracking Proxy that records every accessed
-   * dependency key — that's how the dependency graph is built automatically.
+   * dependency key, that's how the dependency graph is built automatically.
    */
   private executeFactory(
     factory: Factory,
@@ -154,7 +154,7 @@ export class Resolver implements IResolver {
   }
 
   /**
-   * Fire `onInit()` once per key. Async rejections are captured as warnings —
+   * Fire `onInit()` once per key. Async rejections are captured as warnings:
    * the lazy access path can't await, so users must call `preload()` to surface
    * async init errors as proper exceptions.
    */

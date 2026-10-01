@@ -114,7 +114,7 @@ export function buildContainerProxy(
         return resolver.resolve(key);
       },
 
-      // `in` mirrors resolution, which walks the parent chain — unlike the own-key
+      // `in` mirrors resolution, which walks the parent chain, unlike the own-key
       // traps below, which report this container's own bindings (prototype-like split).
       has(_target, prop) {
         if (typeof prop === 'symbol') {
