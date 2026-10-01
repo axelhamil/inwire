@@ -62,7 +62,7 @@ export class ContainerConfigError extends ContainerError {
  * ```typescript
  * container().add('db', () => new DB()).add('db', () => new DB());
  * // DuplicateKeyError: 'db' is already registered in this container.
- * // hint: "Use .extend({ db: ... }) to override at runtime, or .scope({ db: ... }) for request-level overrides."
+ * // hint: "Use .override('db', ...) to replace it before build(), .extend({ db: ... }) at runtime, or .scope({ db: ... }) per request."
  * ```
  */
 export class DuplicateKeyError extends ContainerError {
@@ -71,7 +71,7 @@ export class DuplicateKeyError extends ContainerError {
 
   constructor(key: string) {
     super(`'${key}' is already registered in this container.`);
-    this.hint = `Use .extend({ ${key}: ... }) to override at runtime, or .scope({ ${key}: ... }) for request-level overrides.`;
+    this.hint = `Use .override('${key}', ...) to replace it before build(), .extend({ ${key}: ... }) at runtime, or .scope({ ${key}: ... }) per request.`;
     this.details = { key };
   }
 }

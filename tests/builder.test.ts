@@ -37,6 +37,7 @@ describe('ContainerBuilder duplicate key detection', () => {
     }
     expect(caught).toBeInstanceOf(DuplicateKeyError);
     expect(caught?.details.key).toBe('logger');
+    expect(caught?.hint).toContain(".override('logger'");
     expect(caught?.hint).toContain('.extend(');
   });
 
