@@ -1,36 +1,77 @@
-# inwire — Complete API Reference
+# inwire: Complete API Reference
 
 > Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
 > Proxy-based lazy singleton resolution. ~5 KB gzipped, 0 runtime deps. Clean Architecture internals.
 
-Install: `npm i inwire`
+Install: `npm i inwire` (or `pnpm add inwire`, `bun add inwire`)
 License: MIT
-Exports: ESM with full .d.mts
+Exports: ESM only, full `.d.mts`, `"sideEffects": false`
+Runtimes: Node >= 20.4 (tested on 20, 22, 24), Bun (tested in CI), Deno, Workers, browsers
 
 ## How It Works
 
-The container is a Proxy. Dependencies are defined via a fluent builder: `container().add('key', factory).build()`. Each `.add()` call accumulates the TypeScript type incrementally — the `c` parameter in every factory is typed as the union of all previously registered dependencies.
+The container is a Proxy. Dependencies are defined via a fluent builder: `container().add('key', factory).build()`. Each `.add()` call accumulates the TypeScript type: the `c` parameter of every factory is typed with all previously registered dependencies.
 
-When you access a property on the built container, the Proxy intercepts it and delegates to the Resolver. The Resolver orchestrates three injected collaborators:
+Accessing a property on the built container delegates to the Resolver, which orchestrates three injected collaborators:
 
-1. **CycleDetector** — checks if this key is already mid-resolution (circular dependency guard)
-2. **DependencyTracker** — creates a tracking Proxy that records which other deps the factory accesses (auto-builds the dependency graph)
-3. **Resolver core** — manages the singleton cache and parent chain (for scoped containers)
+1. **CycleDetector**: checks whether the key is already mid-resolution (circular dependency guard).
+2. **DependencyTracker**: creates a tracking Proxy that records which deps the factory reads (auto-builds the dependency graph).
+3. **Resolver core**: manages the singleton cache and the parent chain (scoped containers).
 
 Resolution flow:
-1. Check the singleton cache — if already resolved, return the cached instance
-2. Ask CycleDetector if this key is already being resolved — if so, throw `CircularDependencyError`
-3. Enter the key in CycleDetector, get a tracking Proxy from DependencyTracker
-4. Call the factory function with the tracking proxy
-5. Record the discovered dependencies in the graph
-6. Cache the result (unless marked transient)
-7. Call `onInit()` if the instance implements it (fire-and-forget during lazy access, properly awaited during `preload()`)
-8. Leave the key in CycleDetector (via try/finally)
+1. Refuse the key with `ContainerDisposedError` if it was disposed.
+2. Return the cached instance if already resolved.
+3. Throw `CircularDependencyError` if the key is already being resolved.
+4. Call the factory with a tracking proxy, record the discovered dependencies.
+5. Cache the result (unless transient).
+6. Call `onInit()` if present (fire-and-forget during lazy access, awaited during `preload()`).
 
-The architecture follows Clean Architecture with three layers:
-- **domain/** — Pure contracts (`IResolver`, `ICycleDetector`, `IDependencyTracker`), error types, lifecycle interfaces. Zero external imports.
-- **infrastructure/** — `Resolver`, `CycleDetector`, `DependencyTracker`, `transient()`. Depends only on domain/.
-- **application/** — `ContainerBuilder`, `container-proxy`, `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection`. Depends on domain/ interfaces.
+Layers:
+- **domain/**: pure contracts (`IResolver`, `ICycleDetector`, `IDependencyTracker`), error types, lifecycle interfaces. Zero external imports.
+- **infrastructure/**: `Resolver`, `CycleDetector`, `DependencyTracker`, `transient()` and binding markers. Depends only on domain/.
+- **application/**: `ContainerBuilder`, `container-proxy`, `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order teardown), `Introspection`.
+
+## Recommended application layout
+
+One `*.module.ts` per business module, declared with `defineModule<{ ...prerequisites }>()`. One composition root per app (API, worker, CLI) that composes the modules explicitly with `.addModule()`. No discovery by scan, no container singleton imported across files.
+
+```typescript
+// channel/channel.module.ts: repositories, use cases, controllers of one business module
+import { defineModule } from 'inwire';
+
+export const channelModule = defineModule<{ db: Database }>()((b) =>
+  b
+    .add('channelRepository', (c) => new DrizzleChannelRepository(c.db))
+    .add('updateChannel', (c) => new UpdateChannelUseCase(c.channelRepository))
+    .add('channelRoutes', (c) => channelRoutes({ updateChannel: c.updateChannel })),
+);
+```
+
+```typescript
+// api/main.ts: the composition root of the API
+import { container } from 'inwire';
+import { channelModule } from '../channel/channel.module';
+
+export const createApi = (env: { DATABASE_URL: string }) =>
+  container({ disposeTimeout: 5_000 })
+    .add('pool', () => new Pool({ connectionString: env.DATABASE_URL }), {
+      dispose: (pool) => pool.end(),
+    })
+    .add('db', (c) => drizzle(c.pool))
+    .addModule(channelModule);
+
+const api = createApi({ DATABASE_URL: 'postgres://localhost/app' }).build();
+await api.preload();
+
+process.on('SIGTERM', async () => {
+  await api.dispose();
+  process.exit(0);
+});
+```
+
+Why: `createApi()` returns the builder, so tests call `createApi(env).override(...)` before `.build()`. Each module states what it consumes and `.addModule()` checks it at compile time. `type Api = ReturnType<ReturnType<typeof createApi>['build']>` is derived, never hand-written.
+
+**Temporal and other deterministic sandboxes**: workflow code never imports a module file, the container or inwire. Only the worker composition root builds the container and creates the activities from its bindings; workflows call activities through proxies.
 
 ## container()
 
@@ -38,9 +79,12 @@ The architecture follows Clean Architecture with three layers:
 function container<T extends Record<string, any> = Record<string, unknown>>(options?: ContainerOptions): ContainerBuilder<T>
 ```
 
-Creates a new `ContainerBuilder`. `options` is optional and accepts `{ similarityThreshold?: number }` (default `0.5`, range 0–1) to control the fuzzy "Did you mean …?" threshold in `ProviderNotFoundError`. The option propagates through `scope()`, `extend()`, and `module()` automatically.
+Creates a new `ContainerBuilder`. Options, propagated through `scope()`, `extend()` and `module()`:
 
-Two modes depending on the generic parameter:
+- `similarityThreshold?: number` (default `0.5`, range 0 to 1): threshold of the "Did you mean ...?" suggestion in `ProviderNotFoundError`. `1` disables suggestions.
+- `disposeTimeout?: number` (ms, unset by default): maximum wait for each teardown hook during `dispose()`. A hook still pending is reported as `DisposeTimeoutError` and the next hooks run.
+
+Two modes depending on the generic parameter.
 
 ### Free Mode (default)
 
@@ -56,8 +100,6 @@ const app = container()
 app.userService; // lazy, singleton, fully typed
 ```
 
-Each `.add()` accumulates the type — `c` in every factory knows about all previously registered dependencies.
-
 ### Contract Mode (interface-first)
 
 Pass an interface to constrain keys and return types at compile time:
@@ -70,7 +112,7 @@ interface AppDeps {
 }
 
 const app = container<AppDeps>()
-  .add('ILogger', () => new ConsoleLogger())           // key: autocomplete keyof AppDeps
+  .add('ILogger', () => new ConsoleLogger())           // key: keyof AppDeps
   .add('IDatabase', (c) => new PgDatabase(c.ILogger))  // return must be assignable to Database
   .add('IUserService', (c) => new UserService(c.IDatabase, c.ILogger))
   .build();
@@ -78,7 +120,7 @@ const app = container<AppDeps>()
 app.ILogger; // typed as Logger (not ConsoleLogger)
 ```
 
-The string key acts as a token (like NestJS), but type-safe at compile time. Use this for dependency inversion — program against interfaces, not implementations.
+Fits single-file containers. For multi-module apps, use modules.
 
 ### Instance Values (eager)
 
@@ -86,35 +128,55 @@ Non-function values are registered eagerly:
 
 ```typescript
 const app = container()
-  .add('config', { port: 3000, host: 'localhost' })  // object, not factory — eager
-  .add('db', (c) => new Database(c.config))           // factory — lazy
+  .add('config', { port: 3000, host: 'localhost' })  // object: eager instance
+  .add('db', (c) => new Database(c.config))           // function: lazy factory
   .build();
 ```
 
-Convention: `typeof value === 'function'` → factory (lazy). Otherwise → instance (eager, wrapped in `() => value`).
-To register a function as a value: `.add('fn', () => myFunction)`.
+Convention: `typeof value === 'function'` is a factory (lazy), anything else an instance (eager). To register a function as a value: `.add('fn', () => myFunction)`.
 
 ## ContainerBuilder Methods
 
-### .add(key, factoryOrInstance)
+### .add(key, factoryOrInstance, options?)
 
 ```typescript
-add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V): ContainerBuilder<TContract, Omit<TBuilt, K> & Record<K, V>>
+add<K, V>(key: K, factoryOrInstance: ((c: TBuilt) => V) | V, options?: BindingOptions<V>): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>
+
+interface BindingOptions<V> {
+  dispose?: (instance: V) => void | Promise<void>;
+}
 ```
 
-Registers a dependency. If `factoryOrInstance` is a function, it's treated as a lazy factory. Otherwise, it's wrapped as `() => value` (eager instance). Returns a new builder with the accumulated type.
+Registers a dependency. Runtime validation:
+- Reserved keys (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`) throw `ReservedKeyError`.
+- Re-registering a key throws `DuplicateKeyError` (use `.override()` for intentional replacements).
 
-Validation at runtime:
-- Reserved keys (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`) throw `ReservedKeyError`
-- Re-registering an existing key throws `DuplicateKeyError` (use `.extend()` / `.scope()` for intentional overrides)
+`options.dispose` declares the teardown of resources you do not own, which have no `onDestroy()`: a pool, a client, the stop function of a loop.
+
+```typescript
+const app = container()
+  .add('pool', () => new Pool({ connectionString: 'postgres://localhost/app' }), {
+    dispose: (pool) => pool.end(),
+  })
+  .add('temporal', () => createTemporalClient(), {
+    dispose: (client) => client.connection.close(),
+  })
+  .add('relay', (c) => startRelayLoop(c.pool), { dispose: (stop) => stop() })
+  .build();
+```
+
+- `dispose` is typed against the binding value.
+- It takes precedence over the instance's own `onDestroy()`.
+- Eager instances are disposed too, even if never read.
+- The hook rides on the factory, so it survives `.merge()`, `.module()`, `.extend()` and `.scope()`.
 
 ### .addTransient(key, factory)
 
 ```typescript
-addTransient<K, V>(key: K, factory: (c: TBuilt) => V): ContainerBuilder<TContract, Omit<TBuilt, K> & Record<K, V>>
+addTransient<K, V>(key: K, factory: (c: TBuilt) => V): ContainerBuilder<TContract, Override<TBuilt, Record<K, V>>>
 ```
 
-Registers a transient dependency — a new instance is created on every property access, bypassing the singleton cache.
+New instance on every access, bypassing the singleton cache. Transients are never cached, so they have no teardown.
 
 ```typescript
 const app = container()
@@ -122,37 +184,66 @@ const app = container()
   .addTransient('requestId', () => crypto.randomUUID())
   .build();
 
-app.logger === app.logger;         // true  — singleton
-app.requestId === app.requestId;   // false — new every time
+app.logger === app.logger;         // true: singleton
+app.requestId === app.requestId;   // false: new every time
 ```
 
 ### .addModule(module)
 
 ```typescript
-addModule<TDepsM extends Record<string, any>, TNew extends Record<string, any>>(
-  module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
-): ContainerBuilder<TContract, Omit<TBuilt, keyof TNew> & TNew>
+addModule<TDepsM, TNew>(
+  module: ((builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>) & ModuleCheck<TBuilt, TDepsM, TNew>,
+): ContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>>
 ```
 
-Applies a `Module` (typically produced by `defineModule()`) to the builder. The accumulated `TBuilt` is preserved across the call — chaining `addModule()` accumulates bindings from every applied module.
+Applies a `Module` (from `defineModule()`). For a module with explicit prerequisites (`defineModule<{ db: Db }>()`), two compile-time checks:
 
-`TDepsM` (what the module expects) is inferred independently from the builder's current `TBuilt`. **Prereq satisfaction is not checked at the type level on purpose**: in global mode (`defineModule()` typed against `AppDeps`) the prereq surface is the full app, never the partial builder state. Missing prereqs are caught at resolution time via `ProviderNotFoundError`. `c` in the module's factories is typed according to the module's declared mode (see `defineModule()` below).
+- **Prerequisites**: every key of `TDeps` must already be on the builder with a compatible type. Otherwise the error names the keys: `... is not assignable to type '{ 'missing prerequisites': "db" | "clock"; }'`.
+- **Duplicates**: the keys the module adds must be new. Otherwise: `'{ 'duplicate keys': "users"; }'`. At runtime `.add()` throws `DuplicateKeyError` anyway.
 
-`Override<TBuilt, TNew> = Omit<TBuilt, keyof TNew> & TNew` — keys present in both the existing builder and the module are taken from the module (last write wins). This avoids `A & A → never` collapses that occur when the same class is referenced through both `AppDeps` and a module's `.add()` (TypeScript intersects classes with private members nominally).
+Only the keys the module adds join the host type: the host keeps its own, more precise, type for each prerequisite (`app.db` stays `PgDb`, not the module's `Db` view). An inline module (`.addModule((b) => ...)`) is typed against the host bindings.
 
 ```typescript
 import { container, defineModule } from 'inwire';
 
-const dbModule = defineModule<{ config: { dbUrl: string } }>()((b) =>
-  b
-    .add('db', (c) => new Database(c.config.dbUrl))
-    .add('cache', (c) => new Redis(c.config.dbUrl)),
+const usersModule = defineModule<{ db: Db }>()((b) =>
+  b.add('users', (c) => new UserService(c.db)),
 );
 
 const app = container()
-  .add('config', { dbUrl: 'postgres://...' })
-  .addModule(dbModule)
+  .add('db', () => new PgDb())
+  .addModule(usersModule) // ok: db is on the builder
   .build();
+
+// container().addModule(usersModule);
+// error: '{ 'missing prerequisites': "db"; }'
+```
+
+Global-mode modules (`defineModule()` typed against `AppDeps`) skip both checks: their prerequisites are the whole app, complete only once every module is added. A key still missing raises `ProviderNotFoundError` on resolution.
+
+### .override(key, factoryOrInstance, options?)
+
+```typescript
+override<K extends string & keyof TBuilt>(
+  key: K,
+  factoryOrInstance: ((c: TBuilt) => TBuilt[K]) | TBuilt[K],
+  options?: BindingOptions<TBuilt[K]>,
+): ContainerBuilder<TContract, TBuilt>
+```
+
+Replaces a registered binding before `build()`, typically in tests. Nothing is resolved yet, so every dependent, direct or not, receives the replacement.
+
+- The binding keeps its type: the replacement must be assignable to it.
+- An unknown key is a compile error, and throws `ProviderNotFoundError` (with a suggestion) at runtime.
+- The original `dispose` hook goes away with the original factory. Pass `options` to give the replacement its own.
+
+```typescript
+const app = createApi(testEnv)          // returns the builder, before .build()
+  .override('db', new InMemoryDb())
+  .override('mailer', () => ({ send: async () => {} }))
+  .build();
+
+app.signUp.execute({ email: 'a@b.c' });  // runs against InMemoryDb and the fake mailer
 ```
 
 ### .merge(otherBuilder)
@@ -160,22 +251,22 @@ const app = container()
 ```typescript
 merge<TOther extends Record<string, unknown>>(
   other: ContainerBuilder<Record<string, unknown>, TOther>,
-): ContainerBuilder<TContract, Omit<TBuilt, keyof TOther> & TOther>
+): ContainerBuilder<TContract, Override<TBuilt, TOther>>
 ```
 
-Fuses a standalone `ContainerBuilder` into this one. All factories of `other` are copied into the host. Cross-builder dependencies are resolved at build time. Reserved keys throw `ReservedKeyError`; duplicate keys are silently overwritten (last write wins). This differs from `.add()` which throws `DuplicateKeyError` — `.merge()` is designed for composing independent builders where overrides are intentional.
+Fuses a standalone builder into this one. Factories (and their `dispose` hooks) are copied. Reserved keys throw `ReservedKeyError`; duplicate keys are overwritten (last write wins), unlike `.add()`.
 
-Use `.merge()` when a module has no external prerequisites and is naturally expressed as a standalone builder rather than a `Module`.
+Use it for a module with no prerequisites, naturally expressed as a standalone builder.
 
 ```typescript
-const dbModule = container()
-  .add('db', () => new Database())
-  .add('cache', (c) => new Redis(c.db));
+const cacheModule = container()
+  .add('redis', () => new Redis())
+  .add('cache', (c) => new CacheService(c.redis));
 
 const app = container()
   .add('logger', () => new Logger())
-  .merge(dbModule)
-  .add('api', (c) => new Api(c.db, c.logger))
+  .merge(cacheModule)
+  .add('api', (c) => new Api(c.cache, c.logger))
   .build();
 ```
 
@@ -185,7 +276,7 @@ const app = container()
 build(): Container<TBuilt>
 ```
 
-Builds and returns the container. Creates the Resolver (with injected CycleDetector and DependencyTracker) and the Proxy.
+Builds the container: creates the Resolver (with its collaborators) and the Proxy.
 
 ## transient(factory)
 
@@ -193,7 +284,7 @@ Builds and returns the container. Creates the Resolver (with injected CycleDetec
 function transient<T, C = unknown>(factory: (container: C) => T): (container: C) => T
 ```
 
-Marks a factory as transient for use with `scope()` and `extend()`. The `C` generic propagates the container type from the call site, so `c` is fully typed when used inside `extend({...})` or `scope({...})` — no manual annotation needed. Internally stamps the function with `Symbol.for('inwire:transient')` — the Resolver checks this marker to skip caching.
+Marks a factory as transient for `scope()` and `extend()`. `c` stays typed from the call site. Stamps `Symbol.for('inwire:transient')` on the function.
 
 ```typescript
 import { container, transient } from 'inwire';
@@ -206,10 +297,10 @@ const extended = app.extend({
   requestId: transient(() => crypto.randomUUID()),
 });
 
-extended.requestId === extended.requestId; // false — new every time
+extended.requestId === extended.requestId; // false: new every time
 ```
 
-Use `addTransient()` on the builder for transient deps at build time. Use `transient()` wrapper for scope/extend.
+Use `.addTransient()` on the builder, `transient()` in `scope()` / `extend()`.
 
 ## defineModule()
 
@@ -220,14 +311,39 @@ function defineModule<TDeps extends Record<string, any> = AppDeps>(): <TBuilt>(
 ) => Module<TDeps, TBuilt>
 ```
 
-Defines a reusable, strongly-typed module. Two modes pick by whether you pass `<TDeps>` explicitly. **Pinia-style (no generic) is the recommended default for multi-module apps** because it enables order-independent cross-module forward references.
+Defines a reusable, typed module. The output type is always inferred from the `.add()` chain.
 
-### Pinia-style — `defineModule()` (no generic) — RECOMMENDED for multi-module apps
+### Local mode: `defineModule<TDeps>()` (recommended)
 
-`c` is typed as `AppDeps`, the augmentable global interface. Each module file augments `AppDeps` with the bindings **it provides** via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript merges declarations across files, so `c.X` resolves transparently across modules — even when `X` is added by another module loaded later. **Cross-module forward references work, regardless of `addModule()` order.**
+`c` is typed as `TDeps`: what the module **consumes**. `.addModule()` checks the prerequisites and duplicates at compile time. No global state.
 
 ```typescript
-// modules/persistence.module.ts
+import { container, defineModule } from 'inwire';
+
+const ingestionModule = defineModule<{ db: Database; temporal: Client }>()((b) =>
+  b
+    .add('recordingRepository', (c) => new DrizzleRecordingRepository(c.db))
+    .add('processStarter', (c) => new TemporalProcessStarter(c.temporal))
+    .add('requestProcessing', (c) =>
+      new RequestProcessingUseCase(c.recordingRepository, c.processStarter),
+    ),
+);
+
+const worker = container()
+  .add('db', () => createDb())
+  .add('temporal', () => createTemporalClient())
+  .addModule(ingestionModule)
+  .build();
+```
+
+A business module never imports another one: when it needs something another module provides, it declares it in `TDeps` (a port), and the composition root wires it.
+
+### Global mode: `defineModule()` + `AppDeps` augmentation
+
+`c` is typed as `AppDeps`, the augmentable global interface. Each module file augments `AppDeps` with the bindings **it provides**. Use it when modules forward-reference each other regardless of `addModule()` order. Trade-off: prerequisites are not checked at compile time, a missing key surfaces as `ProviderNotFoundError` on resolution.
+
+```typescript
+// persistence.module.ts
 declare module 'inwire' {
   interface AppDeps {
     IUserRepository: IUserRepository;
@@ -238,7 +354,7 @@ export const persistenceModule = defineModule()((b) =>
   b.add('IUserRepository', (): IUserRepository => new DrizzleUserRepository()),
 );
 
-// modules/auth.module.ts
+// auth.module.ts
 declare module 'inwire' {
   interface AppDeps {
     IAuthProvider: IAuthProvider;
@@ -250,55 +366,25 @@ export const authModule = defineModule()((b) =>
   b
     .add('IAuthProvider', (): IAuthProvider => new BetterAuthProvider())
     .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
-  //                                              ^^^^^^^^^^^^^^^^^^^^
-  //                       provided by persistenceModule — typed via merged AppDeps
+  // c.IUserRepository is provided by persistenceModule, typed via the merged AppDeps
 );
 
-// container.ts
-export const di = container()
-  .addModule(persistenceModule)
-  .addModule(authModule)
-  .build();
-
-export type Di = typeof di; // single source of truth
+// main.ts
+const app = container().addModule(authModule).addModule(persistenceModule).build();
 ```
-
-This mirrors Pinia's `PiniaCustomProperties` and Vue's `ComponentCustomProperties`. Augmentations are erased after type-check — zero runtime cost.
-
-### Local mode — `defineModule<TDeps>()`
-
-`c` in the module's factories is typed as `TDeps`, declared inline. The module's prerequisites are listed locally — no global state, no cross-file coupling. Best when prereqs are a small, fixed surface and you'd rather avoid the global augmentation.
-
-```typescript
-const billingModule = defineModule<{ eventBus: EventBus }>()((b) =>
-  b.add('subscribeUseCase', (c) => new SubscribeUseCase(c.eventBus)),
-);
-
-const app = container()
-  .add('eventBus', () => new EventBus())
-  .addModule(billingModule)
-  .build();
-```
-
-The output type is **inferred** from the chained `.add()` calls — no manual signature.
 
 ### Trade-off
 
-| Pattern | You declare | Cross-module forward ref | Global state |
-|---|---|---|---|
-| `defineModule()` + `declare module` (Pinia) | what the module **provides** (outputs) | yes — order-independent | augments `AppDeps` |
-| `defineModule<TDeps>()` (local) | what the module **consumes** (inputs) | no — prereqs added first | none |
+| Pattern | You declare | Compile-time prerequisite check | Forward references | Global state |
+|---|---|---|---|---|
+| `defineModule<TDeps>()` (local) | what the module **consumes** | yes, missing and duplicate keys named | no, prerequisites added first | none |
+| `defineModule()` + `declare module` | what the module **provides** | no, runtime `ProviderNotFoundError` | yes, order-independent | augments `AppDeps` |
 
-Both patterns coexist. Mix freely — passing `<TDeps>` always overrides the global mode for that module. `defineModule()` returns the same `Module<TDeps, TBuilt>` shape in both modes.
+Both coexist. Passing `<TDeps>` always selects local mode for that module.
 
-### Why the double-call signature `defineModule<TDeps>()(fn)`?
+### Why the double call `defineModule<TDeps>()(fn)`?
 
-TypeScript's generic inference is all-or-nothing: specifying one type argument forces you to specify all of them. A flat single-call signature `defineModule<TDeps, TBuilt>(fn)` would force the consumer to write `TBuilt` by hand, defeating the inference of the `.add()` chain. The curry splits the two type parameters across two calls:
-
-- 1st call `defineModule<TDeps>()` — fixes `TDeps` manually (or falls back to the `AppDeps` default).
-- 2nd call `(fn)` — TS infers `TBuilt` from the chained `.add()` calls inside `fn`.
-
-This is the standard "partial type argument inference" workaround. Tracking issue: https://github.com/microsoft/TypeScript/issues/26242. Same pattern used by zod (`z.object()`), TanStack Query (`useQuery`), Redux Toolkit (`createSlice`).
+TypeScript generic inference is all-or-nothing: a single call `defineModule<TDeps, TBuilt>(fn)` would force you to write `TBuilt` by hand. The first call fixes `TDeps` (or defaults to `AppDeps`), the second infers `TBuilt` from the `.add()` chain. Same workaround as zod, TanStack Query and Redux Toolkit. Tracking issue: https://github.com/microsoft/TypeScript/issues/26242.
 
 ### Type helpers
 
@@ -307,17 +393,13 @@ type InferModuleDeps<M>   = M extends Module<infer D, any> ? D : never;
 type InferModuleBuilt<M>  = M extends Module<any, infer B> ? B : never;
 ```
 
-Useful when authoring higher-order helpers that compose modules.
-
 ## AppDeps (augmentable global interface)
 
 ```typescript
 export interface AppDeps {}
 ```
 
-Empty by default. The augmentation surface for global-mode `defineModule()`. Each module file declares what it provides via `declare module 'inwire' { interface AppDeps { … } }`. TypeScript performs declaration merging across all files, building a single union that `c` is typed against in global-mode factories.
-
-`AppDeps` is exported type-only from the package barrel. There is **no runtime cost** — augmentations are erased after type-checking. The runtime relies on the existing tracking Proxy + lazy resolver, which already handles arbitrary key access.
+Empty by default. The augmentation surface of global-mode `defineModule()`. Type-only, erased after type-checking.
 
 ## container.scope(extra, options?)
 
@@ -325,12 +407,10 @@ Empty by default. The augmentation surface for global-mode `defineModule()`. Eac
 scope<E extends Record<string, (c: T) => unknown>>(
   extra: E,
   options?: ScopeOptions,
-): Container<Omit<T, keyof E> & { [K in keyof E]: ReturnType<E[K]> }>
+): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>
 ```
 
-Creates a child container with additional dependencies. The child inherits all parent singletons via a parent Resolver chain. Scoped singletons are independent — they are cached in the child's own cache.
-
-The `c` parameter in scope factories is typed as the parent container type `T`.
+Child container with additional dependencies. The child inherits parent singletons through a parent Resolver chain; its own bindings are cached in its own cache. `c` is typed as the parent container type.
 
 ```typescript
 const app = container()
@@ -338,105 +418,64 @@ const app = container()
   .add('db', () => new Database())
   .build();
 
-const request = app.scope({
-  requestId: () => crypto.randomUUID(),
-  handler: (c) => new Handler(c.logger),  // c typed as typeof app
-});
-
-request.requestId;  // scoped singleton (unique to this child)
-request.logger;     // inherited from parent (same instance)
-```
-
-Use `scope()` for request-level isolation where child deps should not pollute the parent.
-
-### Named Scopes
-
-Pass `{ name }` for debugging and introspection:
-
-```typescript
 const request = app.scope(
-  { requestId: () => crypto.randomUUID() },
-  { name: 'request-123' },
+  {
+    requestId: () => crypto.randomUUID(),
+    handler: (c) => new Handler(c.logger),  // c typed as typeof app
+  },
+  { name: 'request-123' },                  // optional, shown by inspect() and String()
 );
 
-String(request);        // "Scope(request-123) { requestId (pending) }"
-request.inspect().name; // "request-123"
+request.requestId;  // scoped singleton
+request.logger;     // inherited from the parent (same instance)
 ```
 
-### Scope Override
-
-Scope can override parent keys, replacing the type:
-
-```typescript
-const parent = container()
-  .add('value', () => 'hello')
-  .build();
-
-const child = parent.scope({
-  value: () => 42,  // overrides parent — child.value is number, not string
-});
-```
+A scope can override a parent key; the child type takes the new value type. Disposing a scope tears down only its own bindings, never the parent's.
 
 ## container.extend(extra)
 
 ```typescript
 extend<E extends Record<string, (c: T) => unknown>>(
   extra: E,
-): Container<Omit<T, keyof E> & { [K in keyof E]: ReturnType<E[K]> }>
+): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>
 ```
 
-Returns a new container with additional dependencies. Unlike `scope()`, the existing singleton cache is **shared** (copied) — already-resolved singletons from the original container are available without re-resolution.
-
-The `c` parameter in extend factories is typed as the parent container type `T`.
+New flat container with merged factories. The singleton cache is **shared** (copied): already resolved instances are reused.
 
 ```typescript
 const base = container()
   .add('logger', () => new LoggerService())
   .build();
 
-const extended = base.extend({
+const withDb = base.extend({
   db: (c) => new Database(c.logger),  // c typed as typeof base
 });
-
-extended.logger; // shared singleton from base
-extended.db;     // new dependency
 ```
 
-**scope vs extend**: `scope()` creates a parent-child chain (child delegates to parent for unknown keys). `extend()` creates a flat merged container with a shared cache snapshot. Use `scope()` for request isolation, `extend()` for composition.
-
-**GOTCHA**: Because `extend()` shares the cache, singletons resolved in the original container will be the same objects in the extended container. New singletons resolved in the extended container do NOT propagate back to the original.
+**GOTCHA**: because the cache is shared, `extend({ db: fake })` after `db` or one of its dependents was resolved does NOT replace them: the resolved `db` and every resolved dependent keep the real instance. Use `.extend()` to add bindings (plugins), and builder `.override()` to replace them in tests.
 
 ## container.module(fn)
 
 ```typescript
-module<TNew extends Record<string, unknown>>(
-  fn: (builder: IContainerBuilder<Record<string, unknown>, T>) => IContainerBuilder<Record<string, unknown>, T & TNew>,
-): Container<T & TNew>
+module<TNew extends Record<string, any>>(
+  fn: (builder: IContainerBuilder<Record<string, unknown>, T>) => IContainerBuilder<Record<string, unknown>, TNew>,
+): Container<Override<T, TNew>>
 ```
 
-Applies a module post-build using the builder pattern for incremental type accumulation of `c`. Semantically equivalent to `extend()` but uses `ContainerBuilder` so that each `.add()` in the callback types `c` with all previously added deps.
+Post-build module with the builder DX: each `.add()` in the callback types `c` incrementally. Delegates to `extend()` (same cache sharing). A key overridden in the callback takes its new type.
 
 ```typescript
 const core = container()
-  .add('config', { dbUrl: 'postgres://...' })
+  .add('config', { dbUrl: 'postgres://localhost/app' })
   .add('logger', () => new Logger())
   .build();
 
-// Post-build module — c is typed incrementally
-const withDb = core.module((b) => b
-  .add('db', (c) => new Database(c.config.dbUrl))   // c: { config, logger }
-  .add('cache', (c) => new Redis(c.config.dbUrl))    // c: { config, logger, db }
-);
-
-// Chainable
-const full = withDb.module((b) => b
-  .add('userService', (c) => new UserService(c.db, c.logger))
+const withDb = core.module((b) =>
+  b
+    .add('db', (c) => new Database(c.config.dbUrl))
+    .add('cache', (c) => new Redis(c.config.dbUrl)),
 );
 ```
-
-Works on containers produced by `scope()`, `extend()`, and other `module()` calls.
-
-Internally, `module()` creates a fresh `ContainerBuilder`, passes it to `fn`, extracts the factories via `_toRecord()`, and delegates to `extend()`.
 
 ## container.preload(...keys)
 
@@ -444,31 +483,14 @@ Internally, `module()` creates a fresh `ContainerBuilder`, passes it to `fn`, ex
 preload(...keys: (keyof T)[]): Promise<void>
 ```
 
-Eagerly resolves specific dependencies (warm-up). Call with specific keys to resolve only those, or **without arguments to resolve all dependencies**.
+Resolves the given keys (all keys without arguments) and **awaits** their `onInit()`, in topological levels (Kahn's BFS): independent branches in parallel, levels sequentially. Several rejections are collected into an `AggregateError`.
 
 ```typescript
-const app = container()
-  .add('db', () => new Database())
-  .add('cache', () => new Redis())
-  .add('logger', () => new LoggerService())
-  .build();
-
-await app.preload('db', 'cache');
-// db and cache are now resolved, logger is still lazy
-
-await app.preload();
-// resolve ALL dependencies at once
+await app.preload('db', 'cache'); // only these (and their deps)
+await app.preload();              // everything
 ```
 
-Internally, `preload()` delegates to the `Preloader` use case which:
-1. Resolves all factories with `onInit()` deferred
-2. Builds the full dependency graph via the tracking proxy
-3. Computes topological levels using Kahn's BFS algorithm
-4. Runs `onInit()` for each level in parallel (`Promise.allSettled`), levels sequentially
-
-If multiple `onInit()` calls throw, errors are collected into an `AggregateError`.
-
-**GOTCHA — CRITICAL**: `preload()` is the **only** way to properly await async `onInit()` hooks. During normal property access, `onInit()` is called but NOT awaited (fire-and-forget, errors stored as `AsyncInitErrorWarning` in `health().warnings`). If your service has async initialization (e.g. database connection), you MUST use `preload()` to surface errors.
+**GOTCHA**: `preload()` is the only way to await async `onInit()`. During plain property access, `onInit()` is called but not awaited; a rejection is stored as an `AsyncInitErrorWarning` in `health().warnings`. After `dispose()`, `preload()` rejects with `ContainerDisposedError`.
 
 ## container.reset(...keys)
 
@@ -476,25 +498,71 @@ If multiple `onInit()` calls throw, errors are collected into an `AggregateError
 reset(...keys: (keyof T)[]): void
 ```
 
-Invalidates cached singletons, forcing re-creation on next access. The next property access will re-execute the factory and call `onInit()` again if implemented.
+Drops cached singletons without tearing them down; the next access re-runs the factory and `onInit()`. No arguments resets everything (also init state, dependency graph and warnings). Scope-local.
 
 ```typescript
-app.db;         // creates Database
+app.db;          // creates Database
 app.reset('db');
-app.db;         // creates a NEW Database instance
+app.db;          // creates a NEW Database
 ```
 
-`reset()` does not affect parent scopes — it only clears the cache of the container it's called on. Resetting an unresolved key is a silent no-op.
+## container.dispose(...keys)
+
+```typescript
+dispose(...keys: (keyof T)[]): Promise<void>
+```
+
+Tears down, in **reverse resolution order**, every resolved instance, then the eager instances never read. For each one: the binding's `dispose` hook when declared, otherwise `onDestroy()`. Keeps going on errors, then rethrows (the error itself, or an `AggregateError` when several).
+
+```typescript
+app.db;
+app.cache;
+await app.dispose(); // cache torn down, then db
+```
+
+- **Single use**: after `dispose()`, reading a binding, iterating the container or calling `preload()` throws `ContainerDisposedError`, without calling the factory again. A scope reading a key of its disposed parent throws too. Introspection (`health()`, `inspect()`, `describe()`, `size`) keeps working. A second `dispose()` does nothing.
+- **Targeted**: `dispose('relay')` tears down only those bindings, the others stay usable. Use it to stop loops before closing the pool they use. A binding disposed this way is refused like the rest.
+- **Timeout**: with `container({ disposeTimeout })`, a hook that does not settle in time is reported as `DisposeTimeoutError` and the next hooks still run.
+- **At most once**: a hook never runs twice for the same instance, across a container and every container derived from it with `extend()`.
+
+Graceful shutdown of a worker:
+
+```typescript
+const worker = createWorker(env).build();
+await worker.preload();
+
+process.on('SIGTERM', async () => {
+  await worker.dispose('relay', 'watcher'); // stop the loops first
+  await worker.dispose();                   // then clients and pools, LIFO
+  process.exit(0);
+});
+```
+
+## container[Symbol.asyncDispose]()
+
+```typescript
+[Symbol.asyncDispose](): Promise<void>
+```
+
+Alias of `.dispose()` (full teardown). Enables `await using`:
+
+```typescript
+async function handleRequest(req: Request) {
+  await using request = app.scope({
+    requestId: () => crypto.randomUUID(),
+    handler: (c) => new Handler(c.logger, c.requestId),
+  });
+  return request.handler.run(req);
+} // request.dispose() fires here, even on throw
+```
+
+Requires TypeScript >= 5.2 and a runtime with `Symbol.asyncDispose` (Node >= 20.4, Bun, Deno).
 
 ## container.inspect()
 
 ```typescript
 inspect(): ContainerGraph
-```
 
-Returns the full dependency graph as a serializable JSON object. Named scopes include a `name` field.
-
-```typescript
 interface ContainerGraph {
   name?: string;
   providers: Record<string, ProviderInfo>;
@@ -508,18 +576,13 @@ interface ProviderInfo {
 }
 ```
 
+Full dependency graph as serializable JSON. Pipe `JSON.stringify(app.inspect(), null, 2)` into an LLM or a dashboard.
+
 ```typescript
 app.inspect();
-// {
-//   providers: {
-//     db: { key: 'db', resolved: true, deps: [], scope: 'singleton' },
-//     userRepo: { key: 'userRepo', resolved: true, deps: ['db'], scope: 'singleton' },
-//     logger: { key: 'logger', resolved: false, deps: [], scope: 'singleton' }
-//   }
-// }
+// { providers: { db: { key: 'db', resolved: true, deps: [], scope: 'singleton' },
+//                userRepo: { key: 'userRepo', resolved: true, deps: ['db'], scope: 'singleton' } } }
 ```
-
-**AI usage**: Pipe `JSON.stringify(app.inspect(), null, 2)` into an LLM to analyze the architecture, detect issues, or generate documentation from the live dependency graph.
 
 ## container.describe(key)
 
@@ -527,24 +590,13 @@ app.inspect();
 describe(key: keyof T | string): ProviderInfo
 ```
 
-Returns detailed information about a single provider.
-
-```typescript
-app.describe('userService');
-// { key: 'userService', resolved: true, deps: ['userRepo', 'logger'], scope: 'singleton' }
-```
-
-If the key is not registered, returns `{ key, resolved: false, deps: [], scope: 'singleton' }`.
+One provider. An unregistered key returns `{ key, resolved: false, deps: [], scope: 'singleton' }`.
 
 ## container.health()
 
 ```typescript
 health(): ContainerHealth
-```
 
-Returns container health status and warnings.
-
-```typescript
 interface ContainerHealth {
   totalProviders: number;
   resolved: string[];
@@ -559,107 +611,26 @@ interface ContainerWarning {
 }
 ```
 
-```typescript
-app.health();
-// {
-//   totalProviders: 4,
-//   resolved: ['db', 'logger'],
-//   unresolved: ['cache', 'userService'],
-//   warnings: [
-//     { type: 'scope_mismatch', message: "Singleton 'userService' depends on transient 'requestId'.", details: { singleton: 'userService', transient: 'requestId' } }
-//   ]
-// }
-```
-
-## container.dispose()
-
-```typescript
-dispose(): Promise<void>
-```
-
-Disposes the container. Delegates to the internal `Disposer` which calls `onDestroy()` on all resolved instances that implement it, in **reverse resolution order** (LIFO). Resilient: continues calling other `onDestroy()` handlers even if one throws. Clears the singleton cache, init state, and dependency graph after disposal.
-
-```typescript
-app.db;
-app.cache;
-await app.dispose(); // calls cache.onDestroy() then db.onDestroy()
-```
-
-If multiple `onDestroy()` calls throw, all errors are collected into an `AggregateError`. If only one throws, the raw error is rethrown.
-
-**GOTCHA**: After `dispose()`, accessing dependencies will re-resolve them (cache is cleared). This can cause unexpected behavior if you continue using the container after disposal.
-
-## container[Symbol.asyncDispose]()
-
-```typescript
-[Symbol.asyncDispose](): Promise<void>
-```
-
-ES2023 explicit resource management hook — alias of `.dispose()`. Enables the `await using` declaration: when the binding leaves scope (including via thrown exceptions), `dispose()` fires automatically.
-
-```typescript
-async function handleRequest(req: Request) {
-  await using request = app.scope({
-    requestId: () => crypto.randomUUID(),
-    handler: (c) => new Handler(c.logger, c.requestId),
-  });
-  return request.handler.run(req);
-} // request.dispose() fires automatically here, even on throw
-```
-
-Requirements: TypeScript ≥ 5.2 (the `await using` syntax) and a runtime exposing `Symbol.asyncDispose` (Node ≥ 20.4, Bun, Deno).
-
-## Duplicate keys
-
-`.add()` and `.addTransient()` throw `DuplicateKeyError` if the key is already registered — no silent overwrites:
-
-```typescript
-container()
-  .add('logger', () => new ConsoleLogger())
-  .add('logger', () => new FileLogger()); // throws DuplicateKeyError
-```
-
-For intentional overrides (test doubles, plugins, env-specific bindings), use `.extend()` or `.scope()` on a built container.
-
-## container.size
+## container.size, toJSON(), iteration, String()
 
 ```typescript
 const app = container().add('a', () => 1).add('b', () => 2).build();
-app.size; // 2
+
+app.size;            // 2: registered providers, resolved or not
+app.a;
+JSON.stringify(app); // '{"a":1}': only resolved deps, no lazy resolution
+[...app];            // [['a', 1], ['b', 2]]: iterating resolves every key
+String(app);         // "Container { a -> [] (resolved), b -> [] (resolved) }"
 ```
 
-Read-only number of registered providers. Counts factories, not resolved instances.
+## Assigning a container to a record
 
-## container.toJSON()
+`Container<T>` is assignable to `Record<string, unknown>` without a cast, so it can be handed to an API expecting a plain record (a framework context, a logger, a test helper):
 
 ```typescript
-const app = container().add('a', () => 1).build();
-app.a;                      // resolve
-JSON.stringify(app);        // '{"a":1}' — only resolved deps
+const app = container().add('db', () => new Database()).build();
+const record: Record<string, unknown> = app;
 ```
-
-Returns a plain object of currently cached (resolved) singletons. Does **not** trigger lazy resolution. Enables `JSON.stringify(container)` and `structuredClone(container.toJSON())`.
-
-## for…of container
-
-```typescript
-for (const [key, value] of app) { … }
-const entries = [...app];
-const map = new Map(app);
-```
-
-Implements `Symbol.iterator` yielding `[key, value]` pairs over every registered key (triggers lazy resolution as it iterates). Container methods are not included.
-
-## String(container)
-
-Containers implement `toString()` for human-readable output:
-
-```typescript
-String(app);
-// "Container { db -> [] (resolved), logger (pending) }"
-```
-
-Also works with `Symbol.toPrimitive` and `Symbol.toStringTag`.
 
 ## Lifecycle Hooks: OnInit / OnDestroy
 
@@ -673,10 +644,10 @@ interface OnDestroy {
 }
 ```
 
-Lifecycle hooks are **duck-typed** — no need to explicitly implement the interface. Any object with an `onInit` or `onDestroy` method will be detected automatically.
+Duck-typed: any object with an `onInit` or `onDestroy` method qualifies, no base class. For objects you do not own, declare `{ dispose }` on the binding instead.
 
 ```typescript
-import type { OnInit, OnDestroy } from 'inwire';
+import type { OnDestroy, OnInit } from 'inwire';
 
 class Database implements OnInit, OnDestroy {
   async onInit() { await this.connect(); }
@@ -685,216 +656,192 @@ class Database implements OnInit, OnDestroy {
   private async connect() {/* open the pool */}
   private async disconnect() {/* drain the pool */}
 }
-
-const app = container()
-  .add('db', () => new Database())
-  .build();
-
-// Use preload to properly await async onInit:
-await app.preload('db');
-
-// Later, dispose calls onDestroy in LIFO order:
-await app.dispose();
 ```
 
-**GOTCHA — CRITICAL**: During normal property access (`app.db`), `onInit()` IS called but NOT awaited. It runs as fire-and-forget. If `onInit()` returns a Promise:
-- The Promise is caught silently (errors are swallowed)
-- The instance is returned immediately, potentially before initialization completes
-- Use `await app.preload('db')` to ensure `onInit()` completes and errors surface
+**GOTCHA**: property access cannot await, so `onInit()` is fire-and-forget there. Use `await app.preload()` at boot.
 
-This is by design: property access in JavaScript is synchronous, so the Proxy cannot await.
+## Testing
 
-## Test Overrides Pattern
-
-Build a separate container with mocks — no special test API needed:
+Compose the app through a function returning its builder, then override what the test replaces. Every dependent receives the doubles:
 
 ```typescript
-function createTestContainer() {
-  return container()
-    .add('logger', () => ({ log: () => {} }))       // silent mock
-    .add('db', () => new InMemoryDatabase())         // mock
-    .add('userService', (c) => new UserService(c.db, c.logger))
-    .build();
-}
+import { container, defineModule } from 'inwire';
 
-const test = createTestContainer();
-test.userService; // uses mocked deps
+const usersModule = defineModule<{ db: Db; mailer: Mailer }>()((b) =>
+  b.add('signUp', (c) => new SignUpUseCase(c.db, c.mailer)),
+);
+
+const createApp = () =>
+  container()
+    .add('db', (): Db => new PgDb())
+    .add('mailer', (): Mailer => new SmtpMailer())
+    .addModule(usersModule);
+
+const app = createApp()
+  .override('db', new InMemoryDb())
+  .override('mailer', { send: async () => {} })
+  .build();
 ```
+
+Do not use `.extend()` on a built production container for this: once a binding is resolved, the shared cache keeps the real instance in it and in its dependents.
 
 ## Type Utilities
 
 ```typescript
-// Container shape (resolved deps + container methods)
-type Container<T extends Record<string, unknown> = Record<string, unknown>> = T & IContainer<T>;
-interface ScopeOptions { name?: string }
+// Resolved deps + container methods, assignable to Record<string, unknown>
+type Container<T extends Record<string, any> = Record<string, unknown>> = T & Simplify<IContainer<T>>;
 
-// Augmentable global interface — see "AppDeps" section above
+// T with the keys of U replaced by U, flattened so hovers show one object type
+type Override<T, U> = Simplify<Omit<T, keyof U> & U>;
+
+interface ScopeOptions { name?: string }
+interface ContainerOptions { similarityThreshold?: number; disposeTimeout?: number }
+interface BindingOptions<V> { dispose?: (instance: V) => void | Promise<void> }
+
 interface AppDeps {}
 
-// Module type — produced by defineModule()
 type Module<TDeps extends Record<string, any> = AppDeps, TBuilt extends Record<string, any> = TDeps> =
   (builder: IContainerBuilder<Record<string, unknown>, TDeps>)
     => IContainerBuilder<Record<string, unknown>, TBuilt>;
-
-// Inference helpers for Module<TDeps, TBuilt>
-type InferModuleDeps<M>  = M extends Module<infer D, any> ? D : never;
-type InferModuleBuilt<M> = M extends Module<any, infer B> ? B : never;
 ```
 
-Internal types (not exported from barrel):
-```typescript
-type Factory<T = unknown> = (container: unknown) => T;
-type DepsDefinition = Record<string, Factory>;
-type ResolvedDeps<T extends DepsDefinition> = { readonly [K in keyof T]: ReturnType<T[K]> };
-```
+`Override` and `Simplify` are internal helpers, shown for reading hovers; they are not exported.
 
 ## Error Reference
 
-All errors extend `ContainerError`, which extends `Error`. Every error has:
-- `hint: string` — actionable fix suggestion
-- `details: Record<string, unknown>` — structured context for programmatic consumption
+All errors extend `ContainerError` (abstract, extends `Error`): 10 concrete error classes plus 2 warnings. Each carries:
+- `hint: string`: actionable fix
+- `details: Record<string, unknown>`: structured context
 
 ### ContainerConfigError
 
-Thrown when a non-function value is passed in scope/extend deps definition.
+Non-function value passed to `scope()` or `extend()` (`.add()` accepts instances).
 
 ```
 'apiKey' must be a factory function, got string.
-hint: "Wrap it: apiKey: () => 'sk-123'"
 ```
 
-Constructor: `new ContainerConfigError(key: string, actualType: string)`
 Details: `{ key, actualType }`
-
-Note: In the builder, non-function values passed to `.add()` are automatically treated as instance values (wrapped in `() => value`). This error only applies to `scope()` and `extend()`.
 
 ### ReservedKeyError
 
-Thrown when a reserved container method name is used as a dependency key. Reserved keys: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`.
+Reserved container method name used as a key (`scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size`).
 
 ```
 'inspect' is a reserved container method.
-hint: "Rename this dependency, e.g. 'inspectService' or 'myInspect'."
 ```
 
-Constructor: `new ReservedKeyError(key: string, reserved: readonly string[])`
 Details: `{ key, reserved }`
 
 ### DuplicateKeyError
 
-Thrown when `.add()` or `.addTransient()` is called twice with the same key on a `ContainerBuilder`. `.extend()` and `.scope()` are unaffected — they intentionally allow overrides.
+`.add()` or `.addTransient()` called twice with the same key, including through two modules. Use `.override()` on the builder for an intentional replacement.
 
 ```
-Duplicate key 'logger': this key is already registered on the builder.
-hint: "Use .extend() or .scope() on a built container for intentional overrides."
+'logger' is already registered in this container.
 ```
 
-Constructor: `new DuplicateKeyError(key: string)`
 Details: `{ key }`
 
 ### ProviderNotFoundError
 
-Thrown when a dependency cannot be found during resolution. Includes Levenshtein-based fuzzy suggestion if a similar key exists. The similarity threshold defaults to `0.5` (50%) and is configurable via `container({ similarityThreshold })` at construction time.
+Dependency not found during resolution, or unknown key passed to `.override()`. Includes a Levenshtein suggestion above `similarityThreshold`.
 
 ```
 Cannot resolve 'userServce': dependency 'userServce' not found.
 Registered keys: [userService, logger, db]
 Did you mean 'userService'?
-hint: "Did you mean 'userService'? Or add 'userServce' to your container: ..."
 ```
 
-Constructor: `new ProviderNotFoundError(key: string, chain: string[], registered: string[], suggestion?: string)`
 Details: `{ key, chain, registered, suggestion }`
 
 ### CircularDependencyError
-
-Thrown when a circular dependency is detected in the resolution chain.
 
 ```
 Circular dependency detected while resolving 'authService'.
 Cycle: authService -> userService -> authService
 ```
 
-Constructor: `new CircularDependencyError(key: string, chain: string[])`
 Details: `{ key, chain, cycle }`
 
 ### UndefinedReturnError
 
-Thrown when a factory function returns `undefined`.
+Factory returned `undefined` (missing `return`).
 
 ```
 Factory 'db' returned undefined.
-hint: "Your factory function returned undefined. Did you forget a return statement?"
 ```
 
-Constructor: `new UndefinedReturnError(key: string, chain: string[])`
 Details: `{ key, chain }`
 
 ### FactoryError
 
-Thrown when a factory function throws an error during resolution. Wraps the original error.
+Factory threw during resolution. Wraps the original error (`originalError: unknown`).
 
 ```
 Factory 'db' threw an error: "Connection refused"
-hint: "Check the factory function for 'db'. The error occurred during instantiation."
 ```
 
-Constructor: `new FactoryError(key: string, chain: string[], originalError: unknown)`
-Details: `{ key, chain, originalError }` (originalError is the message string)
-Additional property: `originalError: unknown` (the raw error object)
+Details: `{ key, chain, originalError }` (message string)
 
-### ScopeMismatchWarning
+### ContainerDisposedError
 
-Not an error — a warning emitted when a singleton depends on a transient. Surfaced via `container.health().warnings`.
+A binding read (or preloaded) after `dispose()` tore it down, either the whole container or this key with `dispose('key')`. The factory is not called again.
 
 ```
-Singleton 'userService' depends on transient 'requestId'.
-hint: "The transient value was resolved once and is now frozen inside the singleton. ..."
+Cannot resolve 'db': it was disposed.
 ```
 
-Constructor: `new ScopeMismatchWarning(singletonKey: string, transientKey: string)`
-Properties: `type: 'scope_mismatch'`, `message`, `hint`, `details: { singleton, transient }`
+Details: `{ key }`
 
-### AsyncInitErrorWarning
+### DisposeTimeoutError
 
-Not an error — a warning emitted when an async `onInit()` rejects during lazy resolution (fire-and-forget). Surfaced via `container.health().warnings`. Use `preload()` to await and surface these errors properly.
+A teardown hook (`onDestroy()` or the binding's `dispose`) did not settle within `disposeTimeout` ms. The other hooks still ran; it is rethrown by `dispose()` (inside an `AggregateError` when other hooks failed too).
 
 ```
-onInit() for 'db' rejected: connection refused
-hint: "Use preload('db') to await and handle async init errors."
+Teardown of 'db' did not settle within 5000 ms.
 ```
 
-Constructor: `new AsyncInitErrorWarning(key: string, error: unknown)`
-Properties: `type: 'async_init_error'`, `message`, `hint`, `details: { key, error }`
+Details: `{ key, timeout }`
 
 ### TopologicalSortError
 
-Thrown when the topological sort inside `preload()` cannot complete because some keys remain unordered. In practice this is a defensive guard — `Resolver` detects cycles via `CircularDependencyError` before `topologicalLevels` is reached, so this error is not reachable through the normal public API.
+Defensive guard of `preload()`: keys that could not be ordered. `CircularDependencyError` normally fires first.
 
-```
-Topological sort incomplete: keys [a, b] could not be ordered.
-hint: "A cycle exists among the listed keys. Access any affected key to get a CircularDependencyError with the full chain."
-```
+Details: `{ remaining }`
 
-Constructor: `new TopologicalSortError(remaining: string[])`
-Details: `{ remaining: string[] }`
+### ScopeMismatchWarning (warning)
+
+A singleton depends on a transient, freezing its value. In `health().warnings`. Details: `{ singleton, transient }`.
+
+### AsyncInitErrorWarning (warning)
+
+An async `onInit()` rejected during lazy access. In `health().warnings`; use `preload()` to surface it as an error. Details: `{ key, error }`.
+
+## Migration from 3.x
+
+4.0 changes typing and the lifecycle. Each item is a compile error or a runtime error that points to the fix.
+
+1. **Missing module prerequisites fail to compile.** `addModule(defineModule<{ db: Db }>()(...))` on a builder without `db` now reports `'missing prerequisites': "db"`. Add the prerequisite (or the module providing it) before the module that consumes it.
+2. **The host no longer gains the module's `TDeps`.** A key that only the module declared as a prerequisite is no longer typed on the built container, and the host keeps its own type for each prerequisite. Register the key on the host if you read it from the container.
+3. **Two modules providing the same key fail to compile** (`'duplicate keys': "users"`), instead of compiling and throwing `DuplicateKeyError`. Rename one, or replace it with `.override()`.
+4. **A container is single use after `dispose()`.** Reading a binding, iterating or calling `preload()` throws `ContainerDisposedError` instead of recreating instances. Build a new container (or scope) for fresh instances; use `reset()` to drop cached singletons without tearing them down.
+5. **Test overrides move from `extend()` to `.override()`.** Expose a function returning the builder, then `createApp().override('db', fake).build()`. `extend()` on a resolved container never replaced resolved bindings.
+6. **Node >= 20.4** is declared in `engines`.
+
+New, non-breaking: `.add(key, value, { dispose })`, eager instances disposed, `dispose(...keys)`, `container({ disposeTimeout })`, `Container` assignable to `Record<string, unknown>`, `container.module()` typed with `Override`.
 
 ## Gotchas and Common Pitfalls
 
-1. **Async onInit is fire-and-forget**: `onInit()` is called during property access but NOT awaited. Errors are swallowed. Use `await app.preload('key')` to properly await async initialization.
-
-2. **Scope mismatch**: A singleton depending on a transient freezes the transient value. The singleton will always see the first resolved value. Check `app.health().warnings` for `scope_mismatch` warnings.
-
-3. **Reserved keys**: `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size` cannot be used as dependency keys. Using them throws `ReservedKeyError`.
-
-4. **Undefined return**: Factories that return `undefined` (missing return statement, void function) throw `UndefinedReturnError`. Every factory must return a value.
-
-5. **LIFO dispose order**: `dispose()` calls `onDestroy()` in reverse resolution order. If `db` was resolved before `cache`, `cache.onDestroy()` runs first.
-
-6. **extend() shares cache**: `extend()` copies the singleton cache. Already-resolved singletons are shared. New resolutions in the extended container do NOT propagate back to the original.
-
-7. **scope() vs extend()**: `scope()` creates a parent-child chain (child delegates unknown keys to parent). `extend()` creates a flat merged container. Use `scope()` for request-level isolation, `extend()` for additive composition.
-
-8. **reset() is scope-local**: `reset()` only clears the cache of the container it's called on. In a scope, resetting a key does not affect the parent container's cache.
-
-9. **Instance values in builder only**: `.add('key', plainObject)` auto-wraps as eager instance only on the builder. `scope()` and `extend()` require factory functions — passing non-functions throws `ContainerConfigError`.
+1. **Async onInit is fire-and-forget on property access.** `await app.preload()` at boot.
+2. **Scope mismatch**: a singleton depending on a transient freezes its value. Check `health().warnings`.
+3. **Reserved keys** throw `ReservedKeyError`.
+4. **Undefined return** throws `UndefinedReturnError`.
+5. **LIFO teardown**: `dispose()` runs hooks in reverse resolution order, eager instances never read last. Stop loops with `dispose('loop')` first when their order is not the resolution order.
+6. **No access after dispose**: `ContainerDisposedError`. Build a new container.
+7. **extend() shares the cache**: it never replaces resolved bindings or their dependents. Use `.override()` in tests.
+8. **scope() vs extend()**: `scope()` is a parent-child chain for request isolation, `extend()` a flat merged container for additive composition.
+9. **reset() is scope-local** and does not tear instances down.
+10. **Instances on the builder only**: `scope()` and `extend()` require factory functions (`ContainerConfigError`).
+11. **Global-mode modules are not checked at compile time**: prefer `defineModule<TDeps>()` unless modules forward-reference each other.
+12. **Deterministic sandboxes** (Temporal workflows): never import a module file, the container or inwire from workflow code.
