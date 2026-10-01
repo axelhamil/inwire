@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { container, defineModule } from '../src/index.js';
 
 describe('module (post-build)', () => {
@@ -150,5 +150,18 @@ describe('module (post-build)', () => {
 
     expect(extended.auth).toBe('authenticated');
     expect(extended.api).toBe('authenticated-api');
+  });
+});
+
+describe('module (post-build) typing', () => {
+  it('overrides a key with the module type instead of intersecting both', () => {
+    const base = container()
+      .add('value', () => 'hello')
+      .build();
+
+    const overridden = base.module((b) => b.add('value', () => 42));
+
+    expectTypeOf(overridden.value).toEqualTypeOf<number>();
+    expect(overridden.value).toBe(42);
   });
 });

@@ -208,9 +208,7 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   scope<E extends Record<string, (c: T) => unknown>>(
     extra: E,
     options?: ScopeOptions,
-  ): Container<
-    Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }
-  >;
+  ): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>;
 
   /**
    * Returns a new container with additional dependencies.
@@ -218,9 +216,7 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
    */
   extend<E extends Record<string, (c: T) => unknown>>(
     extra: E,
-  ): Container<
-    Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }
-  >;
+  ): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>;
 
   /**
    * Applies a module post-build using the builder pattern.
@@ -231,8 +227,8 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   module<TNew extends Record<string, any>>(
     fn: (
       builder: IContainerBuilder<Record<string, unknown>, T>,
-    ) => IContainerBuilder<Record<string, unknown>, T & TNew>,
-  ): Container<T & TNew>;
+    ) => IContainerBuilder<Record<string, unknown>, TNew>,
+  ): Container<Override<T, TNew>>;
 
   /** Pre-resolves dependencies (warm-up). No args = preload everything. */
   preload(...keys: (keyof T)[]): Promise<void>;
