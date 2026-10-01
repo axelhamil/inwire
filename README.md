@@ -272,7 +272,7 @@ await app.dispose();        // then everything else
 - **Ordered by resolution.** A binding is torn down before the bindings its factory read. A loop that uses the pool must read `c.pool` (or what wraps it) in its factory, not only later in a callback, so that it stops before the pool closes.
 - **Targeted.** `dispose(...keys)` tears down only those bindings.
 - **Bounded.** With `disposeTimeout`, a hook still pending after the delay is reported as a `DisposeTimeoutError` and the next hooks run, so one stuck connection cannot block the shutdown.
-- **Final.** A disposed binding is never recreated: reading it, iterating, or `preload()` throws `ContainerDisposedError` (a scope reading a key of its disposed parent too). Introspection (`health()`, `inspect()`, `size`) keeps working. Build a new container when you need fresh instances.
+- **Final.** A disposed binding is never recreated: reading it, iterating, or `preload()` throws `ContainerDisposedError` (a scope reading a key of its disposed parent too). While the hooks run, work they drain (in-flight requests, a last loop tick) can still read cached bindings; no factory runs. Introspection (`health()`, `inspect()`, `size`) keeps working. Build a new container when you need fresh instances.
 
 **Explicit resource management:** every container implements `[Symbol.asyncDispose]`, so `await using` disposes it when the block exits:
 
