@@ -192,9 +192,14 @@ export interface ScopeOptions {
 /**
  * Full container type exposed to the user.
  * Combines resolved dependencies with container methods.
+ *
+ * The methods are flattened from {@link IContainer} into an object type: unlike an
+ * interface, it is assignable to `Record<string, unknown>`, so a container can be
+ * handed to an API expecting a plain record without a cast.
  */
 // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-export type Container<T extends Record<string, any> = Record<string, unknown>> = T & IContainer<T>;
+export type Container<T extends Record<string, any> = Record<string, unknown>> = T &
+  Simplify<IContainer<T>>;
 
 /**
  * Container methods interface. Defines the API available on every container.
