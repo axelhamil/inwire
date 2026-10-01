@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container } from '../src/index.js';
+import { ContainerDisposedError, container } from '../src/index.js';
 
 describe('lifecycle', () => {
   it('calls onInit when a dependency is first resolved', () => {
@@ -209,7 +209,7 @@ describe('lifecycle', () => {
     await expect(c.preload('db')).rejects.toThrow('connection refused');
   });
 
-  it('dispose clears cache — re-access calls factory again', async () => {
+  it('dispose clears cache and refuses re-access instead of calling the factory again', async () => {
     let callCount = 0;
 
     const c = container()
@@ -224,9 +224,9 @@ describe('lifecycle', () => {
 
     await c.dispose();
 
-    // After dispose, cache is cleared — factory runs again
-    expect(c.service.id).toBe(2);
-    expect(callCount).toBe(2);
+    expect(c.health().resolved).toEqual([]);
+    expect(() => c.service).toThrow(ContainerDisposedError);
+    expect(callCount).toBe(1);
   });
 
   it('dispose calls async onDestroy and awaits it', async () => {
@@ -413,7 +413,7 @@ describe('lifecycle', () => {
       expect(destroyCount).toBe(1);
     });
 
-    it('access after dispose creates fresh instances', async () => {
+    it('access after dispose throws instead of creating a fresh instance', async () => {
       let callCount = 0;
 
       const c = container()
@@ -422,10 +422,11 @@ describe('lifecycle', () => {
 
       expect(c.service.id).toBe(1);
       await c.dispose();
-      expect(c.service.id).toBe(2);
+      expect(() => c.service).toThrow(ContainerDisposedError);
+      expect(callCount).toBe(1);
     });
 
-    it('preload after dispose re-initializes', async () => {
+    it('preload after dispose rejects without re-initializing', async () => {
       let initCount = 0;
 
       const c = container()
@@ -440,8 +441,8 @@ describe('lifecycle', () => {
       expect(initCount).toBe(1);
 
       await c.dispose();
-      await c.preload();
-      expect(initCount).toBe(2);
+      await expect(c.preload()).rejects.toThrow(ContainerDisposedError);
+      expect(initCount).toBe(1);
     });
   });
 
@@ -527,8 +528,10 @@ describe('lifecycle', () => {
         // expected
       }
 
-      // Cache was cleared despite the error — factory runs again
-      expect(c.service.id).toBe(2);
+      // Cache was cleared despite the error, and the binding stays disposed
+      expect(c.health().resolved).toEqual([]);
+      expect(() => c.service).toThrow(ContainerDisposedError);
+      expect(callCount).toBe(1);
     });
   });
 

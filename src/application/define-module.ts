@@ -2,6 +2,7 @@ import type { AppDeps, IContainerBuilder } from '../domain/types.js';
 
 /**
  * A reusable module: a function that extends a builder with new bindings.
+ * Apply it with `.addModule()`, which checks `TDeps` against the builder.
  *
  * `TDeps` are the bindings the module **expects already present** on the target builder.
  * `TBuilt` is the full set of bindings present after the module is applied (`TDeps` + what the module adds).
@@ -22,14 +23,17 @@ export type Module<
  *
  * Two modes, picked by whether you pass `<TDeps>` explicitly:
  *
+ * - **Local mode** (`defineModule<TDeps>()`, recommended): `c` is typed as `TDeps`,
+ *   the bindings the module consumes, declared inline. `.addModule()` checks them at
+ *   compile time: a missing or incompatible prerequisite is an error naming the key,
+ *   and only the keys the module adds join the host type. One `*.module.ts` per
+ *   business module, composed explicitly by each app.
  * - **Global mode** (`defineModule()`, no generic): `c` is typed as `AppDeps`,
  *   the augmentable global interface. Each module file augments `AppDeps` with
  *   what it provides via `declare module 'inwire' { interface AppDeps { … } }`.
- *   Cross-module forward references work transparently — `c.X` resolves even
- *   when `X` is added by another module.
- * - **Local mode** (`defineModule<TDeps>()`): `c` is typed as `TDeps`, declared
- *   locally inline. No global augmentation needed. Use when the module's
- *   prerequisites are a tight, fixed surface.
+ *   Use it when modules forward-reference each other: `c.X` resolves even when
+ *   `X` is added by another module later. Prerequisites are then only checked at
+ *   resolution time (`ProviderNotFoundError`).
  *
  * The output type is always **inferred** from the chained `.add()` calls.
  *
@@ -40,8 +44,8 @@ export type Module<
  * `defineModule<TDeps, TBuilt>(fn)` would force you to write `TBuilt` by hand,
  * defeating the inference. The curry splits the two parameters across two calls:
  *
- * - 1st call `defineModule<TDeps>()` — fixes `TDeps` manually (or falls back to `AppDeps`).
- * - 2nd call `(fn)` — `TBuilt` is inferred from the `.add()` chain in `fn`.
+ * - 1st call `defineModule<TDeps>()` fixes `TDeps` manually (or falls back to `AppDeps`).
+ * - 2nd call `(fn)`: `TBuilt` is inferred from the `.add()` chain in `fn`.
  *
  * Tracking issue: https://github.com/microsoft/TypeScript/issues/26242 (partial
  * type argument inference). Same workaround used by zod, TanStack Query, RTK.
@@ -60,7 +64,7 @@ export type Module<
  *     .add('IUserRepository', () => new DrizzleUserRepository())
  *     .add('SignInUseCase', (c) => new SignInUseCase(c.IUserRepository, c.IAuthProvider)),
  *   //                                                                   ^^^^^^^^^^^^^^^
- *   //                                          provided by another module — typed via AppDeps
+ *   //                                          provided by another module, typed via AppDeps
  * );
  * ```
  *

@@ -15,9 +15,11 @@
     "dist",
     "!dist/*.map"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
+    "test:bun": "bun --bun vitest run --typecheck.enabled=false",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p examples/tsconfig.json",
@@ -28,16 +30,17 @@
     "bench": "tsx benchmarks/resolution.ts",
     "check": "biome check && pnpm typecheck && pnpm check:docs && pnpm test:coverage",
     "check:docs": "tsx scripts/check-docs.ts",
-    "example:web": "tsx examples/01-web-service.ts",
-    "example:test": "tsx examples/02-modular-testing.ts",
-    "example:plugin": "tsx examples/03-plugin-system.ts",
-    "example:modules": "tsx examples/04-modules.ts",
-    "example:typing": "tsx examples/05-zod-style-typing.ts",
-    "example:pinia": "tsx examples/06-pinia-augmentation.ts",
+    "example:api": "tsx examples/app/api.ts",
+    "example:worker": "tsx examples/app/worker.ts",
+    "example:testing": "tsx examples/app/testing.ts",
+    "example:scopes": "tsx examples/01-request-scopes.ts",
+    "example:introspection": "tsx examples/02-introspection.ts",
+    "example:global-modules": "tsx examples/03-global-modules.ts",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "keywords": [
     "dependency-injection",
@@ -58,6 +61,9 @@
   },
   "packageManager": "pnpm@10.26.0",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.4"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.7",
     "@semantic-release/changelog": "^6.0.3",

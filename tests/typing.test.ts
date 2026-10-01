@@ -285,3 +285,15 @@ describe('Builder type safety', () => {
     expect(extended.cache).toBe('cached');
   });
 });
+
+describe('Container assignability', () => {
+  it('is assignable to a plain record without a cast', () => {
+    const c = container()
+      .add('db', () => 'postgres')
+      .build();
+
+    const record: Record<string, unknown> = c;
+
+    expect(record.db).toBe('postgres');
+  });
+});

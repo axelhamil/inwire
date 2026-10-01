@@ -33,7 +33,7 @@ export abstract class ContainerError extends Error {
 
 /**
  * Thrown when a non-function value is passed in `scope()` or `extend()` deps.
- * (`.add()` accepts non-function values as eager instances — see {@link ContainerBuilder.add}.)
+ * (`.add()` accepts non-function values as eager instances, see {@link ContainerBuilder.add}.)
  *
  * @example
  * ```typescript
@@ -54,14 +54,15 @@ export class ContainerConfigError extends ContainerError {
 }
 
 /**
- * Thrown when a key is registered more than once on the same builder.
- * Use `.extend()` or `.scope()` for intentional overrides at runtime.
+ * Thrown when a key is registered more than once on the same builder, including by
+ * two modules (also a compile error for modules with explicit prerequisites).
+ * Use `.override()` on the builder to replace a binding on purpose.
  *
  * @example
  * ```typescript
  * container().add('db', () => new DB()).add('db', () => new DB());
  * // DuplicateKeyError: 'db' is already registered in this container.
- * // hint: "Use .extend({ db: ... }) to override at runtime, or .scope({ db: ... }) for request-level overrides."
+ * // hint: "Use .override('db', ...) to replace it before build(), .extend({ db: ... }) at runtime, or .scope({ db: ... }) per request."
  * ```
  */
 export class DuplicateKeyError extends ContainerError {
@@ -70,7 +71,7 @@ export class DuplicateKeyError extends ContainerError {
 
   constructor(key: string) {
     super(`'${key}' is already registered in this container.`);
-    this.hint = `Use .extend({ ${key}: ... }) to override at runtime, or .scope({ ${key}: ... }) for request-level overrides.`;
+    this.hint = `Use .override('${key}', ...) to replace it before build(), .extend({ ${key}: ... }) at runtime, or .scope({ ${key}: ... }) per request.`;
     this.details = { key };
   }
 }
@@ -214,8 +215,52 @@ export class FactoryError extends ContainerError {
 }
 
 /**
+ * Thrown when a binding is read after `dispose()` tore it down: a closed pool or a
+ * stopped loop must not be silently recreated by a late access.
+ *
+ * @example
+ * ```typescript
+ * await app.dispose();
+ * app.db;
+ * // ContainerDisposedError: Cannot resolve 'db': it was disposed.
+ * ```
+ */
+export class ContainerDisposedError extends ContainerError {
+  readonly hint: string;
+  readonly details: { key: string };
+
+  constructor(key: string) {
+    super(`Cannot resolve '${key}': it was disposed.`);
+    this.hint = `Something still uses '${key}' after shutdown. Stop it before calling dispose(), or build a new container.`;
+    this.details = { key };
+  }
+}
+
+/**
+ * Reported by `dispose()` when a teardown hook (`onDestroy()` or the binding's
+ * `dispose`) does not settle within `disposeTimeout` ms. The other hooks still run.
+ *
+ * @example
+ * ```typescript
+ * const app = container({ disposeTimeout: 5000 }).add('db', () => new Db()).build();
+ * await app.dispose();
+ * // DisposeTimeoutError: Teardown of 'db' did not settle within 5000 ms.
+ * ```
+ */
+export class DisposeTimeoutError extends ContainerError {
+  readonly hint: string;
+  readonly details: { key: string; timeout: number };
+
+  constructor(key: string, timeout: number) {
+    super(`Teardown of '${key}' did not settle within ${timeout} ms.`);
+    this.hint = `Make the teardown of '${key}' settle faster (close idle connections, stop pending work), or raise disposeTimeout.`;
+    this.details = { key, timeout };
+  }
+}
+
+/**
  * Warning emitted when a singleton depends on a transient dependency.
- * The transient value gets frozen inside the singleton — almost always a bug.
+ * The transient value gets frozen inside the singleton, almost always a bug.
  *
  * @example
  * ```typescript
@@ -270,7 +315,7 @@ export class AsyncInitErrorWarning implements ContainerWarning {
 
 /**
  * Thrown when the topological sort of the dependency graph cannot complete because
- * some keys remain unordered. In practice this is a defensive guard — `Resolver`
+ * some keys remain unordered. In practice this is a defensive guard: `Resolver`
  * detects cycles via `CircularDependencyError` before `topologicalLevels` is reached,
  * so this error is not reachable through the normal public API.
  *
@@ -288,7 +333,7 @@ export class TopologicalSortError extends ContainerError {
     super(`Topological sort incomplete: keys [${remaining.join(', ')}] could not be ordered.`);
     this.hint = [
       'A cycle exists among the listed keys. To debug:',
-      '  1. Access any affected key on the container — it will throw a CircularDependencyError with the full chain',
+      '  1. Access any affected key on the container: it will throw a CircularDependencyError with the full chain',
       '  2. Restructure the dependency graph to remove the cycle',
     ].join('\n');
     this.details = { remaining };

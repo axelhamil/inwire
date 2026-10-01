@@ -15,7 +15,8 @@ function createMockResolver(
     // Unused methods — stub them out
     resolve: vi.fn(),
     isResolved: vi.fn(),
-    getFactories: vi.fn(),
+    getFactories: () => new Map(),
+    markDisposed: vi.fn(),
     getDepGraph: vi.fn(),
     getResolvedKeys: vi.fn(),
     getWarnings: vi.fn(),

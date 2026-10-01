@@ -2,6 +2,7 @@ import type { AnyWarning } from '../domain/errors.js';
 import {
   AsyncInitErrorWarning,
   CircularDependencyError,
+  ContainerDisposedError,
   FactoryError,
   ProviderNotFoundError,
   ScopeMismatchWarning,
@@ -31,7 +32,7 @@ export interface ResolverDeps {
 }
 
 /**
- * Core resolver — lazy singleton resolution with parent chain support.
+ * Core resolver: lazy singleton resolution with parent chain support.
  * Delegates cycle detection and dependency tracking to injected collaborators.
  */
 export class Resolver implements IResolver {
@@ -47,6 +48,8 @@ export class Resolver implements IResolver {
   private readonly cycleDetector: ICycleDetector;
   private readonly dependencyTracker: IDependencyTracker;
   private readonly destroyedInstances: WeakSet<object>;
+  private readonly disposedKeys = new Set<string>();
+  private disposed = false;
 
   constructor(deps: ResolverDeps) {
     this.factories = deps.factories;
@@ -67,12 +70,15 @@ export class Resolver implements IResolver {
   resolve(key: string, chain: string[] = []): unknown {
     const factory = this.factories.get(key);
 
-    // Fast path: singleton cache hit.
+    // Fast path: singleton cache hit. Stays open while dispose() runs its hooks, so
+    // work they drain can still read live instances; the cache is cleared right after.
     if (factory && !isTransient(factory) && this.cache.has(key)) {
       return this.cache.get(key);
     }
 
-    // No local factory — walk parent chain or throw with fuzzy suggestion.
+    if (this.disposed || this.disposedKeys.has(key)) throw new ContainerDisposedError(key);
+
+    // No local factory: walk parent chain or throw with fuzzy suggestion.
     if (!factory) return this.delegateToParentOrThrow(key, chain);
 
     // Circular dependency guard.
@@ -104,7 +110,7 @@ export class Resolver implements IResolver {
 
   /**
    * Invokes the factory through a tracking Proxy that records every accessed
-   * dependency key — that's how the dependency graph is built automatically.
+   * dependency key, that's how the dependency graph is built automatically.
    */
   private executeFactory(
     factory: Factory,
@@ -149,7 +155,7 @@ export class Resolver implements IResolver {
   }
 
   /**
-   * Fire `onInit()` once per key. Async rejections are captured as warnings —
+   * Fire `onInit()` once per key. Async rejections are captured as warnings:
    * the lazy access path can't await, so users must call `preload()` to surface
    * async init errors as proper exceptions.
    */
@@ -171,6 +177,7 @@ export class Resolver implements IResolver {
   private classifyError(key: string, currentChain: string[], error: unknown): Error {
     if (
       error instanceof CircularDependencyError ||
+      error instanceof ContainerDisposedError ||
       error instanceof ProviderNotFoundError ||
       error instanceof UndefinedReturnError ||
       error instanceof FactoryError
@@ -273,6 +280,11 @@ export class Resolver implements IResolver {
    */
   getDestroyedInstances(): WeakSet<object> {
     return this.destroyedInstances;
+  }
+
+  markDisposed(...keys: string[]): void {
+    if (keys.length === 0) this.disposed = true;
+    for (const key of keys) this.disposedKeys.add(key);
   }
 
   /** Look up a factory in this resolver or its parent chain. */

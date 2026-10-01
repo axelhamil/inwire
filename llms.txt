@@ -1,85 +1,113 @@
 # inwire
 
 > Type-safe dependency injection for TypeScript. Builder pattern, full inference, no decorators, no tokens.
-> Proxy-based lazy singleton resolution. ~5 KB gzipped, 0 runtime deps.
+> Proxy-based lazy singleton resolution. ~5 KB gzipped, 0 runtime deps. ESM only, Node >= 20.4, Bun, Deno.
 
-inwire uses a fluent builder to define dependencies one by one: `container().add('key', factory).build()`. Each `.add()` accumulates the type — the `c` parameter in every factory knows about all previously registered dependencies. Property access on the built container triggers lazy resolution through a Proxy. Instances are cached as singletons by default. Built-in introspection methods return serializable JSON, making the dependency graph directly consumable by LLMs and AI tooling.
+inwire uses a fluent builder to define dependencies one by one: `container().add('key', factory).build()`. Each `.add()` accumulates the type: the `c` parameter of every factory knows all previously registered dependencies. Property access on the built container triggers lazy resolution through a Proxy. Instances are singletons by default. Introspection methods return serializable JSON, so the dependency graph is directly consumable by LLMs and AI tooling.
+
+## Recommended pattern
+
+One `*.module.ts` per business module with locally declared prerequisites, one composition root per app that composes modules explicitly, a builder function so tests can override bindings, and `dispose()` on shutdown.
+
+```typescript
+import { container, defineModule } from 'inwire';
+
+// users.module.ts: declares what it consumes; addModule() checks it at compile time
+export const usersModule = defineModule<{ db: Db }>()((b) =>
+  b
+    .add('userRepository', (c) => new DrizzleUserRepository(c.db))
+    .add('signUp', (c) => new SignUpUseCase(c.userRepository)),
+);
+
+// api.ts: the composition root; returns the builder, no exported container singleton
+export const createApi = (databaseUrl: string) =>
+  container({ disposeTimeout: 5_000 })
+    .add('pool', () => new Pool({ connectionString: databaseUrl }), {
+      dispose: (pool) => pool.end(),
+    })
+    .add('db', (c) => drizzle(c.pool))
+    .addModule(usersModule);
+
+const api = createApi('postgres://localhost/app').build();
+await api.preload();
+process.on('SIGTERM', () => void api.dispose());
+
+// api.test.ts: every dependent of db receives the fake
+const testApi = createApi('unused').override('db', new InMemoryDb()).build();
+```
+
+Temporal workflow code (a deterministic sandbox) never imports a module file, the container or inwire: only the worker composition root builds the container and creates activities from its bindings.
 
 ## Architecture
 
 Clean Architecture with enforced dependency rule: `domain/` has zero imports from other layers.
 
-- **domain/** — Pure contracts: `IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator` interfaces; 9 error classes (1 abstract `ContainerError` + 8 concrete, each with `hint` + `details`); `OnInit`/`OnDestroy` lifecycle (duck-typed); validation + Levenshtein fuzzy matching.
-- **infrastructure/** — Concrete mechanisms: `Resolver` (lazy resolution, singleton cache, parent chain), `CycleDetector` (circular dep detection), `DependencyTracker` (tracking Proxy + dep graph builder), `transient()` marker.
-- **application/** — Use cases + orchestration: `ContainerBuilder` (fluent builder), `container-proxy` (Proxy construction + dispatch), `Scoper` (builds child resolvers for `.scope()`), `Extender` (builds merged resolvers for `.extend()`), `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order onDestroy), `Introspection` (inspect/describe/health). Four Composition Roots (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`) are the only files allowed to instantiate concrete infra.
-
-SOLID principles: each file has a single responsibility. The Resolver receives collaborators via constructor injection (DIP). Application layer depends on `IResolver` interface, not the concrete class.
+- **domain/**: pure contracts (`IResolver`, `ICycleDetector`, `IDependencyTracker`, `IValidator`); 11 error classes (abstract `ContainerError` + 10 concrete, each with `hint` + `details`) and 2 warnings; duck-typed `OnInit`/`OnDestroy`; validation + Levenshtein fuzzy matching.
+- **infrastructure/**: `Resolver` (lazy resolution, singleton cache, parent chain), `CycleDetector`, `DependencyTracker` (tracking Proxy + dep graph), `transient()` and binding markers.
+- **application/**: `ContainerBuilder`, `container-proxy`, `Scoper` (`.scope()`), `Extender` (`.extend()`), `Preloader` (topological sort + parallel onInit), `Disposer` (reverse-order teardown), `Introspection`. Four Composition Roots (`container-builder.ts`, `container-proxy.ts`, `scoper.ts`, `extender.ts`) are the only files allowed to instantiate concrete infra.
 
 ## Core API
 
-- `container<T?>(options?)` — Creates a `ContainerBuilder`. Pass interface `T` for contract mode (constrains keys and return types). `options?: ContainerOptions` accepts `{ similarityThreshold?: number }` (default `0.5`, range 0–1) to control fuzzy "Did you mean?" suggestions in `ProviderNotFoundError`. Propagated through `scope()`, `extend()`, and `module()`.
-- `defineModule<TDeps?>()(fn)` — Defines a reusable, strongly-typed module. Two modes:
-  - **Pinia-style (recommended for multi-module apps)** — `defineModule()` (no generic). `c` is typed as the augmentable global `AppDeps` interface. Each module file augments `AppDeps` with what it PROVIDES via `declare module 'inwire' { interface AppDeps { … } }`. Cross-module forward references work, order-independent.
-  - **Local prereqs** — `defineModule<TDeps>()`. `c` is typed locally as `TDeps`. Module declares what it CONSUMES inline. No global state; no cross-module forward refs (prereqs must be added before).
-- `transient(factory)` — Marks a factory as transient for scope/extend (new instance on every access, no caching).
+- `container<T?>(options?)`: creates a `ContainerBuilder`. Pass interface `T` for contract mode. `options: ContainerOptions` = `{ similarityThreshold?: number; disposeTimeout?: number }`, propagated through `scope()`, `extend()` and `module()`.
+- `defineModule<TDeps?>()(fn)`: defines a reusable, typed module. Two modes:
+  - **Local (recommended)**: `defineModule<TDeps>()`. `c` is typed as `TDeps`, what the module CONSUMES. `.addModule()` checks at compile time that every prerequisite is already on the builder with a compatible type (`'missing prerequisites': "db"`) and that the provided keys are new (`'duplicate keys': "users"`).
+  - **Global**: `defineModule()` + `declare module 'inwire' { interface AppDeps { ... } }` per file, what the module PROVIDES. Cross-module forward references, order-independent, but prerequisites are not checked at compile time (`ProviderNotFoundError` at resolution).
+- `transient(factory)`: marks a factory as transient for `scope()` / `extend()`.
 
 ## ContainerBuilder Methods
 
-- `.add(key, factory)` — Register a dependency. Factory `(c) => value` is lazy; non-function value is eager (instance).
-- `.addTransient(key, factory)` — Register a transient dependency (fresh instance on every access).
-- `.addModule(module)` — Apply a `Module` (typically produced by `defineModule()`). Accumulates the module's bindings into the builder; preserves the previously accumulated `TBuilt`.
-- `.merge(otherBuilder)` — Fuse a standalone `ContainerBuilder` into this one. Copies factories; cross-builder dependencies resolve at build time. Use for modules with no prerequisites.
-- `.build()` — Build and return the container.
+- `.add(key, factoryOrInstance, options?)`: function = lazy factory, anything else = eager instance. `options.dispose(instance)` tears down resources without `onDestroy()` (pool, client, loop stop function); it takes precedence over `onDestroy()` and also runs for eager instances never read.
+- `.addTransient(key, factory)`: fresh instance on every access.
+- `.addModule(module)`: applies a module, with the compile-time checks above. Only the keys the module adds join the host type; the host keeps its own prerequisite types. An inline module is typed against the host.
+- `.override(key, factoryOrInstance, options?)`: replaces a registered binding before build (tests). Every dependent receives it; the type is kept; an unknown key is a compile error and a `ProviderNotFoundError`.
+- `.merge(otherBuilder)`: fuses a standalone builder (module without prerequisites). Last write wins.
+- `.build()`: returns the container.
 
 ## Container Methods
 
-- `.scope(extra, options?)` — Creates a child container with additional deps. Child inherits parent singletons. Pass `{ name }` for debugging/introspection.
-- `.extend(extra)` — Returns a new container with merged factories. Shares existing singleton cache.
-- `.module(fn)` — Applies a module post-build using the builder for typed `c`. Semantically equivalent to `extend()` but with incremental type accumulation. `fn` receives a `ContainerBuilder` seeded with the container's type.
-- `.preload(...keys)` — Eagerly resolves specific dependencies, or all if no keys given. Only way to await async `onInit()`. Uses topological sorting (Kahn's algorithm) to initialize independent branches in parallel.
-- `.reset(...keys)` — Invalidates cached singletons, forcing re-creation on next access. Does not affect parent scopes.
-- `.inspect()` — Returns the full dependency graph as `ContainerGraph` (serializable JSON).
-- `.describe(key)` — Returns `ProviderInfo` for a single provider.
-- `.health()` — Returns `ContainerHealth` with warnings (e.g. scope mismatches).
-- `.dispose()` — Calls `onDestroy()` on all resolved instances in LIFO order. Resilient: collects all errors, throws `AggregateError` if multiple failures.
-- `[Symbol.asyncDispose]()` — Alias of `.dispose()`. Enables ES2023 `await using container = ...` for automatic disposal at scope exit (requires TS ≥ 5.2 and Node ≥ 20.4, Bun, or Deno).
-- `.size` — Read-only number of registered providers.
-- `.toJSON()` — Plain object of resolved (cached) deps only. Does not trigger lazy resolution. Makes `JSON.stringify(container)` work.
-- `[Symbol.iterator]()` — Yields `[key, value]` pairs for every registered provider (triggers lazy resolution). Enables `for…of`, spread, `Array.from`.
+- `.scope(extra, options?)`: child container; inherits parent singletons. `{ name }` for introspection.
+- `.extend(extra)`: flat container with merged factories, shares the singleton cache. It does NOT replace bindings already resolved, nor their dependents: use builder `.override()` in tests.
+- `.module(fn)`: post-build module with the builder DX; result typed with `Override` (an overridden key takes its new type).
+- `.preload(...keys)`: resolves and awaits `onInit()` (all keys without arguments), topological levels in parallel.
+- `.reset(...keys)`: drops cached singletons without tearing them down. Scope-local.
+- `.dispose(...keys)`: reverse resolution order teardown (binding `dispose` hook, else `onDestroy()`), eager instances included. With keys, only those bindings. Afterwards, reading a disposed binding or `preload()` throws `ContainerDisposedError` (introspection still works). Errors are collected and rethrown (`AggregateError` when several).
+- `[Symbol.asyncDispose]()`: alias of `.dispose()`, enables `await using`.
+- `.inspect()`, `.describe(key)`, `.health()`: dependency graph, one provider, health and warnings (JSON).
+- `.size`, `.toJSON()`, `[Symbol.iterator]()`: provider count, resolved deps only, `[key, value]` pairs (resolves lazily).
+- A `Container` is assignable to `Record<string, unknown>` without a cast.
 
 ## Types
 
-- `AppDeps` — Augmentable global interface. Empty by default. Augmented per module via `declare module 'inwire' { interface AppDeps { … } }` to enable cross-module forward references when using `defineModule()` without `<TDeps>`.
-- `Container<T>` — Resolved deps + container methods
-- `ContainerBuilder<TContract, TBuilt>` — Fluent builder class
-- `IContainerBuilder<TContract, TBuilt>` — Domain-level builder interface (used in `module()` callbacks; `ContainerBuilder` implements it structurally)
-- `IContainer<T>` — Container methods interface
-- `Module<TDeps, TBuilt>` — Type of a module produced by `defineModule()`. `TDeps` are the prereqs, `TBuilt` is `TDeps` plus what the module adds.
-- `InferModuleDeps<M>` / `InferModuleBuilt<M>` — Type helpers to extract a module's prerequisites and full output.
-- `OnInit` — Interface: `onInit(): void | Promise<void>`
-- `OnDestroy` — Interface: `onDestroy(): void | Promise<void>`
-- `ContainerOptions` — `{ similarityThreshold?: number }` — options for `container()`
-- `ScopeOptions` — `{ name?: string }` — options for `scope()`
-- `ContainerGraph` — `{ name?: string, providers: Record<string, ProviderInfo> }`
-- `ContainerHealth` — `{ totalProviders, resolved, unresolved, warnings }`
-- `ContainerWarning` — `{ type: 'scope_mismatch' | 'async_init_error', message, details }`
-- `ProviderInfo` — `{ key, resolved, deps, scope: 'singleton' | 'transient' }`
+- `AppDeps`: augmentable global interface for global-mode modules.
+- `Container<T>`: resolved deps + container methods.
+- `ContainerBuilder<TContract, TBuilt>` / `IContainerBuilder<TContract, TBuilt>`: fluent builder class / domain interface.
+- `IContainer<T>`: container methods interface.
+- `Module<TDeps, TBuilt>`, `InferModuleDeps<M>`, `InferModuleBuilt<M>`: module type and helpers.
+- `BindingOptions<V>`: `{ dispose?: (instance: V) => void | Promise<void> }`.
+- `ContainerOptions`: `{ similarityThreshold?: number; disposeTimeout?: number }`.
+- `OnInit` / `OnDestroy`: `onInit(): void | Promise<void>` / `onDestroy(): void | Promise<void>`.
+- `ScopeOptions`, `ContainerGraph`, `ContainerHealth`, `ContainerWarning`, `ProviderInfo`, `Factory`.
 
 ## Errors
 
 All errors extend `ContainerError` and include `hint` (actionable fix) and `details` (structured context).
 
-- `ContainerConfigError` — Non-function value in deps definition (scope/extend)
-- `ReservedKeyError` — Reserved container method name used as dependency key
-- `DuplicateKeyError` — `.add()` or `.addTransient()` called twice with the same key (use `.extend()` / `.scope()` for intentional overrides)
-- `ProviderNotFoundError` — Dependency not found during resolution (includes fuzzy suggestion via Levenshtein)
-- `CircularDependencyError` — Circular dependency detected in resolution chain
-- `UndefinedReturnError` — Factory returned `undefined`
-- `FactoryError` — Factory threw an error during resolution (wraps original error)
-- `TopologicalSortError` — Topological sort in `preload()` could not complete (defensive guard; `CircularDependencyError` normally fires first)
-- `ScopeMismatchWarning` — Singleton depends on transient (warning, not error)
-- `AsyncInitErrorWarning` — Async `onInit()` rejected during lazy access (warning, not error)
+- `ContainerConfigError`: non-function value in `scope()` / `extend()`.
+- `ReservedKeyError`: container method name used as a key.
+- `DuplicateKeyError`: key registered twice (use `.override()` for intentional replacements).
+- `ProviderNotFoundError`: key not found at resolution or in `.override()` (fuzzy suggestion).
+- `CircularDependencyError`: cycle in the resolution chain.
+- `UndefinedReturnError`: factory returned `undefined`.
+- `FactoryError`: factory threw (wraps the original error).
+- `ContainerDisposedError`: binding read or preloaded after `dispose()`.
+- `DisposeTimeoutError`: teardown hook did not settle within `disposeTimeout` ms.
+- `TopologicalSortError`: defensive guard of `preload()`.
+- `ScopeMismatchWarning`, `AsyncInitErrorWarning`: warnings in `health().warnings`.
+
+## Migration from 3.x
+
+4.0 breaking changes: missing module prerequisites and duplicate module keys fail to compile; the host no longer gains a module's `TDeps`; a container refuses access after `dispose()` (`ContainerDisposedError`, build a new one); test overrides move from `extend()` to builder `.override()`; Node >= 20.4. Details in `llms-full.txt`, section "Migration from 3.x".
 
 ## Full Documentation
 
-See `llms-full.txt` for complete API reference with signatures, examples, and gotchas.
+See `llms-full.txt` for the complete API reference with signatures, examples and gotchas.

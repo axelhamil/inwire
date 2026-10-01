@@ -1,17 +1,21 @@
-import { DuplicateKeyError, ReservedKeyError } from '../domain/errors.js';
+import { DuplicateKeyError, ProviderNotFoundError, ReservedKeyError } from '../domain/errors.js';
 import type {
   AddBuilt,
+  BindingOptions,
   BuilderKey,
   Container,
   ContainerOptions,
   Factory,
   FactoryOrInstance,
   IContainerBuilder,
+  ModuleCheck,
+  ModuleProvides,
   NonReservedKey,
   Override,
 } from '../domain/types.js';
 import { RESERVED_KEYS as RESERVED } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
+import { describeBinding } from '../infrastructure/binding.js';
 import { CycleDetector } from '../infrastructure/cycle-detector.js';
 import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
@@ -21,9 +25,12 @@ import { buildContainerProxy } from './container-proxy.js';
 /**
  * Fluent builder that constructs a typed DI container incrementally.
  *
+ * Return it, unbuilt, from your composition root (`createApi()`): the app calls
+ * `.build()`, tests call `.override(...)` first.
+ *
  * Two modes, one class:
- * - `container<AppDeps>()` — contract mode: keys restricted to `keyof AppDeps`, return types constrained
- * - `container()` — free mode: keys are any `string`, types inferred freely
+ * - `container<AppDeps>()`: contract mode: keys restricted to `keyof AppDeps`, return types constrained
+ * - `container()`: free mode: keys are any `string`, types inferred freely
  *
  * Each `.add()` call accumulates the type so that subsequent factories
  * receive a fully-typed `c` parameter with all previously registered deps.
@@ -43,21 +50,21 @@ export class ContainerBuilder<
   }
 
   /**
-   * Registers a dependency — factory (lazy) or instance (eager).
+   * Registers a dependency: factory (lazy) or instance (eager).
    *
    * Convention: `typeof value === 'function'` → factory. Otherwise → instance (wrapped in `() => value`).
    * To register a function as a value: `add('fn', () => myFunction)`.
+   *
+   * `options.dispose` declares how `dispose()` tears the instance down, for objects
+   * without `onDestroy()`: `.add('pool', () => new Pool(), { dispose: (p) => p.end() })`.
    */
   add<K extends BuilderKey<TContract>, V extends TContract[K]>(
     key: NonReservedKey<K>,
     factoryOrInstance: FactoryOrInstance<TBuilt, V>,
+    options?: BindingOptions<V>,
   ): ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>> {
     this.validateKey(key);
-    if (typeof factoryOrInstance === 'function') {
-      this.factories.set(key, factoryOrInstance as Factory);
-    } else {
-      this.factories.set(key, () => factoryOrInstance);
-    }
+    this.factories.set(key, toFactory(factoryOrInstance, options));
     return this as unknown as ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
   }
 
@@ -74,26 +81,80 @@ export class ContainerBuilder<
   }
 
   /**
-   * Applies a module — a function that chains `.add()` calls on this builder.
+   * Replaces a registered binding before the container is built, typically in tests.
+   * Every dependent, direct or not, receives the replacement, since nothing has been
+   * resolved yet. The binding keeps its type: the replacement must be assignable to it.
+   * Throws `ProviderNotFoundError` for a key that is not registered.
    *
-   * `TDepsM` (the module's expected prereqs) is inferred independently from the
-   * builder's current `TBuilt`. Prereq satisfaction is NOT enforced at the type
-   * level on purpose: in global mode (`defineModule()` typed against `AppDeps`)
-   * the prereq surface is the full app, never the partial builder state. The
-   * runtime guarantees correctness via `ProviderNotFoundError` if a key is
-   * missing at resolution time.
+   * The original `dispose` hook is dropped with the original factory; pass `options`
+   * to give the replacement its own.
+   *
+   * @example
+   * ```typescript
+   * const app = createApp() // returns the builder, before .build()
+   *   .override('db', new InMemoryDb())
+   *   .override('mailer', () => ({ send: async () => {} }))
+   *   .build();
+   * ```
+   */
+  override<K extends string & keyof TBuilt>(
+    key: K,
+    factoryOrInstance: FactoryOrInstance<TBuilt, TBuilt[K]>,
+    options?: BindingOptions<TBuilt[K]>,
+  ): ContainerBuilder<TContract, TBuilt> {
+    if (!this.factories.has(key)) {
+      const registered = [...this.factories.keys()];
+      const suggestion = new Validator(this.options.similarityThreshold).suggestKey(
+        key,
+        registered,
+      );
+      throw new ProviderNotFoundError(key, [], registered, suggestion);
+    }
+    this.factories.set(key, toFactory(factoryOrInstance, options));
+    return this;
+  }
+
+  /**
+   * Applies a module, typically one made with {@link defineModule}.
+   *
+   * Checked at compile time for modules with explicit prerequisites
+   * (`defineModule<{ db: Db }>()`):
+   * - every prerequisite must already be on this builder with a compatible type,
+   *   otherwise the error names the missing keys (`'missing prerequisites': 'db'`);
+   * - the keys the module provides must be new (`'duplicate keys': 'users'`),
+   *   which `.add()` would reject at runtime anyway with `DuplicateKeyError`.
+   *
+   * Only the keys the module adds join the builder type: the host keeps its own,
+   * more precise, types for the prerequisites.
+   *
+   * Global-mode modules (`defineModule()` typed against `AppDeps`) skip the check:
+   * their prerequisites are the whole app, complete only once every module is added.
+   * A key still missing at that point raises `ProviderNotFoundError` on resolution.
+   *
+   * @example
+   * ```typescript
+   * const usersModule = defineModule<{ db: Db }>()((b) =>
+   *   b.add('users', (c) => new UserService(c.db)),
+   * );
+   *
+   * container().add('db', () => new PgDb()).addModule(usersModule); // ok
+   * container().addModule(usersModule); // error: 'missing prerequisites': 'db'
+   * ```
    */
   addModule<
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TDepsM extends Record<string, any>,
+    TDepsM extends Record<string, any> = TBuilt,
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TNew extends Record<string, any>,
+    TNew extends Record<string, any> = TBuilt,
   >(
-    module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
-  ): ContainerBuilder<TContract, Override<TBuilt, TNew>> {
+    module: ((
+      builder: IContainerBuilder<TContract, TDepsM>,
+    ) => IContainerBuilder<TContract, TNew>) &
+      ModuleCheck<TBuilt, TDepsM, TNew>,
+  ): ContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>> {
     return module(
       this as unknown as IContainerBuilder<TContract, TDepsM>,
-    ) as unknown as ContainerBuilder<TContract, Override<TBuilt, TNew>>;
+    ) as unknown as ContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>>;
   }
 
   /**
@@ -109,9 +170,9 @@ export class ContainerBuilder<
    *
    * Cross-builder dependencies are resolved at build time. Reserved keys throw.
    *
-   * Duplicate keys do NOT throw here: the merged builder wins (last write wins), which
-   * is what makes `.merge()` usable for overriding a module in tests. `.add()` is the
-   * strict path — it throws `DuplicateKeyError`.
+   * Duplicate keys do NOT throw here: the merged builder wins (last write wins).
+   * `.add()` is the strict path: it throws `DuplicateKeyError`. To replace a single
+   * binding in tests, prefer `.override()`, which checks the key and the type.
    */
   merge<TOther extends Record<string, unknown>>(
     other: ContainerBuilder<Record<string, unknown>, TOther>,
@@ -146,6 +207,7 @@ export class ContainerBuilder<
       resolver,
       () => new ContainerBuilder(this.options),
       validator,
+      this.options.disposeTimeout,
     ) as Container<TBuilt>;
   }
 
@@ -164,7 +226,23 @@ export class ContainerBuilder<
 }
 
 /**
+ * Turns the value given to `.add()` into a factory. Eager instances and bindings with
+ * a `dispose` hook carry their metadata, so `dispose()` can reach an eager instance
+ * that was never read.
+ */
+function toFactory<V>(value: unknown, options: BindingOptions<V> = {}): Factory {
+  const dispose = options.dispose as ((instance: unknown) => unknown) | undefined;
+  if (typeof value === 'function') {
+    return dispose ? describeBinding(value as Factory, { dispose }) : (value as Factory);
+  }
+  return describeBinding(() => value, { dispose, eager: { value } });
+}
+
+/**
  * Creates a new container builder.
+ *
+ * `options` tunes the fuzzy "Did you mean" suggestions (`similarityThreshold`) and
+ * bounds each teardown hook of `dispose()` (`disposeTimeout`, in ms).
  *
  * @example Contract mode (interface-first):
  * ```typescript

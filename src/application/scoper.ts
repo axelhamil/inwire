@@ -11,7 +11,7 @@ import { Resolver } from '../infrastructure/resolver.js';
  * `container-proxy.ts`, and `extender.ts`.
  *
  * Child semantics:
- * - Own cache (isolated from parent) — parent singletons are reused on cache
+ * - Own cache (isolated from parent): parent singletons are reused on cache
  *   miss via the resolver's parent chain.
  * - Overriding a key shadows the parent; the parent's cached instance is
  *   untouched.

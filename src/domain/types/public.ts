@@ -1,5 +1,5 @@
 /**
- * Public types — everything users see and consume from `import 'inwire'`.
+ * Public types: everything users see and consume from `import 'inwire'`.
  * No internal collaborator interfaces here (those live in `./internal.ts`).
  */
 
@@ -14,11 +14,79 @@
 export type Factory<T = unknown> = (container: unknown) => T;
 
 /**
- * Utility: `T` with keys of `U` overridden by `U` — avoids the `A & A → never`
+ * Utility: flattens an intersection into a single object type, so hovers show
+ * `{ db: Db; users: Users }` instead of a chain of `Omit<…> & Record<…>`.
+ */
+export type Simplify<T> = { [K in keyof T]: T[K] } & {};
+
+/**
+ * Utility: `T` with keys of `U` overridden by `U`. Avoids the `A & A → never`
  * collapse when classes have private members and the same key is declared on
  * both sides (e.g. global `AppDeps` + module `.add()`).
  */
-export type Override<T, U> = Omit<T, keyof U> & U;
+export type Override<T, U> = Simplify<Omit<T, keyof U> & U>;
+
+/**
+ * `true` when `TDeps` is the global {@link AppDeps} interface, i.e. the module was
+ * declared with `defineModule()` and no explicit prerequisites.
+ */
+type IsAppDeps<TDeps> = [TDeps] extends [AppDeps]
+  ? [AppDeps] extends [TDeps]
+    ? true
+    : false
+  : false;
+
+/** Prerequisite keys of a module that the host lacks or provides with an incompatible type. */
+type UnmetPrerequisites<THost, TDeps> = keyof TDeps extends infer K
+  ? K extends keyof TDeps
+    ? K extends keyof THost
+      ? THost[K] extends TDeps[K]
+        ? never
+        : K
+      : K
+    : never
+  : never;
+
+/**
+ * Keys provided twice. Keys declared in `AppDeps` are left to the runtime
+ * `DuplicateKeyError`: a global-mode module types the host with the whole `AppDeps`
+ * surface, so their presence in the host type says nothing about what was added.
+ */
+type DuplicateKeys<THost, TProvided> = Exclude<
+  Extract<keyof TProvided, keyof THost>,
+  keyof AppDeps
+>;
+
+/**
+ * Bindings a module adds to its host. A module typed against explicit prerequisites
+ * provides only the keys it adds; a global-mode module (typed against `AppDeps`)
+ * exposes the whole `AppDeps` surface, which is what its forward references rely on.
+ */
+export type ModuleProvides<TDeps, TBuilt> =
+  IsAppDeps<TDeps> extends true ? TBuilt : Omit<TBuilt, keyof TDeps>;
+
+/**
+ * Compile-time gate of `.addModule()`. Resolves to `unknown` (no constraint) when the
+ * host satisfies the module, otherwise to an object type whose property names the
+ * offending keys, so the compiler error reads
+ * `Property '"missing prerequisites"' is missing … { "missing prerequisites": "db" }`.
+ *
+ * Global-mode modules are exempt: their prerequisites are the whole app, which is
+ * only complete once every module is added.
+ */
+export type ModuleCheck<THost, TDeps, TBuilt> =
+  IsAppDeps<TDeps> extends true
+    ? unknown
+    : // `infer` forces evaluation, so the error prints `"db"` rather than the alias name.
+      UnmetPrerequisites<THost, TDeps> extends infer Missing
+      ? [Missing] extends [never]
+        ? DuplicateKeys<THost, Omit<TBuilt, keyof TDeps>> extends infer Duplicate
+          ? [Duplicate] extends [never]
+            ? unknown
+            : { 'duplicate keys': Duplicate }
+          : never
+        : { 'missing prerequisites': Missing }
+      : never;
 
 /**
  * Reserved method names on the container that cannot be used as dependency keys.
@@ -53,7 +121,7 @@ export type BuilderKey<TContract> = string & keyof TContract;
 export type NonReservedKey<K extends string> = K & (K extends ReservedKey ? never : K);
 
 /**
- * Argument type for `.add()` — accepts either a lazy factory or a non-function
+ * Argument type for `.add()`: accepts either a lazy factory or a non-function
  * eager instance. The `V extends Function ? never : V` clause excludes functions
  * from the instance variant (functions are always treated as factories).
  */
@@ -63,16 +131,37 @@ export type FactoryOrInstance<TBuilt, V> =
   | (V & (V extends Function ? never : V));
 
 /**
- * Resulting `TBuilt` after `.add(key, value)` — same as `Override<TBuilt, Record<K, V>>`,
+ * Resulting `TBuilt` after `.add(key, value)`, same as `Override<TBuilt, Record<K, V>>`,
  * just named for readability.
  */
 export type AddBuilt<TBuilt, K extends string, V> = Override<TBuilt, Record<K, V>>;
 
 /**
+ * Per-binding options, the optional third argument of `.add()`.
+ *
+ * @example Third-party resources without `onDestroy()`:
+ * ```typescript
+ * container()
+ *   .add('pool', (c) => new Pool({ connectionString: c.env.DATABASE_URL }), {
+ *     dispose: (pool) => pool.end(),
+ *   })
+ *   .add('relay', (c) => startRelayLoop(c.pool), { dispose: (stop) => stop() });
+ * ```
+ */
+export interface BindingOptions<V> {
+  /**
+   * Teardown hook run by `dispose()` with the binding's instance, eager instances
+   * included. Use it for objects you do not own (a pool, a client, the stop function
+   * of a loop). Takes precedence over the instance's own `onDestroy()`.
+   */
+  dispose?: (instance: V) => void | Promise<void>;
+}
+
+/**
  * Global, augmentable interface describing the application's dependency shape.
  *
  * Empty by default. Each module file augments it with the bindings IT provides,
- * enabling **cross-module forward references** in factories — `c.X` resolves
+ * enabling **cross-module forward references** in factories: `c.X` resolves
  * even when `X` is added by another module loaded later.
  *
  * @example Augment from a module file:
@@ -86,10 +175,10 @@ export type AddBuilt<TBuilt, K extends string, V> = Override<TBuilt, Record<K, V
  * ```
  *
  * When `defineModule()` is called without an explicit `<TDeps>` generic, the
- * builder's `c` parameter is typed as `AppDeps` — the union of every module's
+ * builder's `c` parameter is typed as `AppDeps`, the union of every module's
  * augmentations. TypeScript merges these declarations across files.
  */
-// biome-ignore lint/suspicious/noEmptyInterface: empty interface IS the augmentation surface — required so users can `declare module 'inwire' { interface AppDeps { ... } }`
+// biome-ignore lint/suspicious/noEmptyInterface: empty interface IS the augmentation surface, required so users can `declare module 'inwire' { interface AppDeps { ... } }`
 export interface AppDeps {}
 
 /**
@@ -97,7 +186,7 @@ export interface AppDeps {}
  */
 export interface ContainerOptions {
   /**
-   * Minimum similarity (0–1) for a registered key to be suggested as a
+   * Minimum similarity (0 to 1) for a registered key to be suggested as a
    * "Did you mean …?" fix in {@link ProviderNotFoundError}. Defaults to `0.5`.
    *
    * Raise it to only suggest near-identical keys, lower it to suggest more loosely.
@@ -111,6 +200,20 @@ export interface ContainerOptions {
    * ```
    */
   similarityThreshold?: number;
+
+  /**
+   * Maximum time, in ms, `dispose()` waits for each teardown hook (`onDestroy()` or a
+   * binding's `dispose`). A hook still pending after it is reported as a
+   * {@link DisposeTimeoutError} and the next hooks run, so one hung connection cannot
+   * block a graceful shutdown. Unset by default: every hook is awaited.
+   * Propagated through `scope()`, `extend()` and `module()`.
+   *
+   * @example
+   * ```typescript
+   * const app = container({ disposeTimeout: 5_000 }).build();
+   * ```
+   */
+  disposeTimeout?: number;
 }
 
 /**
@@ -124,9 +227,14 @@ export interface ScopeOptions {
 /**
  * Full container type exposed to the user.
  * Combines resolved dependencies with container methods.
+ *
+ * The methods are flattened from {@link IContainer} into an object type: unlike an
+ * interface, it is assignable to `Record<string, unknown>`, so a container can be
+ * handed to an API expecting a plain record without a cast.
  */
 // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-export type Container<T extends Record<string, any> = Record<string, unknown>> = T & IContainer<T>;
+export type Container<T extends Record<string, any> = Record<string, unknown>> = T &
+  Simplify<IContainer<T>>;
 
 /**
  * Container methods interface. Defines the API available on every container.
@@ -140,19 +248,19 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   scope<E extends Record<string, (c: T) => unknown>>(
     extra: E,
     options?: ScopeOptions,
-  ): Container<
-    Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }
-  >;
+  ): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>;
 
   /**
    * Returns a new container with additional dependencies.
    * Existing singletons are shared. The original container is not modified.
+   *
+   * Sharing the cache means an already resolved binding is not replaced, and neither
+   * are the dependents that captured it. To swap a dependency in tests, use
+   * `.override()` on the builder before `build()`.
    */
   extend<E extends Record<string, (c: T) => unknown>>(
     extra: E,
-  ): Container<
-    Omit<T, keyof { [K in keyof E]: ReturnType<E[K]> }> & { [K in keyof E]: ReturnType<E[K]> }
-  >;
+  ): Container<Override<T, { [K in keyof E]: ReturnType<E[K]> }>>;
 
   /**
    * Applies a module post-build using the builder pattern.
@@ -163,8 +271,8 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   module<TNew extends Record<string, any>>(
     fn: (
       builder: IContainerBuilder<Record<string, unknown>, T>,
-    ) => IContainerBuilder<Record<string, unknown>, T & TNew>,
-  ): Container<T & TNew>;
+    ) => IContainerBuilder<Record<string, unknown>, TNew>,
+  ): Container<Override<T, TNew>>;
 
   /** Pre-resolves dependencies (warm-up). No args = preload everything. */
   preload(...keys: (keyof T)[]): Promise<void>;
@@ -181,13 +289,21 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   /** Invalidates cached singletons, forcing re-creation on next access. */
   reset(...keys: (keyof T)[]): void;
 
-  /** LIFO `onDestroy()` on all resolved instances. */
-  dispose(): Promise<void>;
+  /**
+   * Tears down, in reverse resolution order, every resolved instance and every eager
+   * instance: the binding's `dispose` hook when declared, otherwise `onDestroy()`.
+   * Keeps going on errors, then rethrows them (an `AggregateError` when several).
+   *
+   * With keys, tears down only those bindings (`dispose('relay')` stops a loop before
+   * the pool it uses closes). A disposed binding is never recreated: reading it
+   * throws `ContainerDisposedError`.
+   */
+  dispose(...keys: (keyof T)[]): Promise<void>;
 
-  /** ES2023 explicit resource management hook — alias of {@link IContainer.dispose}. */
+  /** ES2023 explicit resource management hook, alias of {@link IContainer.dispose}. */
   [Symbol.asyncDispose](): Promise<void>;
 
-  /** Returns a plain object of all currently resolved (cached) deps — does NOT trigger lazy resolution. Used by JSON.stringify. */
+  /** Returns a plain object of all currently resolved (cached) deps, does NOT trigger lazy resolution. Used by JSON.stringify. */
   toJSON(): Record<string, unknown>;
 
   /** Count of registered providers (factories), regardless of resolution state. */
@@ -201,7 +317,7 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
  * Domain-level contract of the fluent builder.
  *
  * The concrete `ContainerBuilder` class in `application/` implements this
- * structurally — keeping the dependency rule one-way (`domain ← application`).
+ * structurally, keeping the dependency rule one-way (`domain ← application`).
  * Consumers writing builder callbacks (e.g. inside `.module()` or `defineModule()`)
  * receive a value of this interface; they should never need the concrete class.
  */
@@ -212,10 +328,11 @@ export interface IContainerBuilder<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   TBuilt extends Record<string, any> = {},
 > {
-  /** Registers a dependency — factory (lazy) or instance (eager). */
+  /** Registers a dependency: factory (lazy) or instance (eager), with an optional `dispose` hook. */
   add<K extends BuilderKey<TContract>, V extends TContract[K]>(
     key: NonReservedKey<K>,
     factoryOrInstance: FactoryOrInstance<TBuilt, V>,
+    options?: BindingOptions<V>,
   ): IContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
 
   /** Registers a transient dependency (new instance on every access). */
@@ -224,15 +341,28 @@ export interface IContainerBuilder<
     factory: (c: TBuilt) => V,
   ): IContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
 
-  /** Applies a module — a function that chains `.add()` calls on this builder. */
+  /** Replaces a registered binding before build (test doubles); every dependent receives it. */
+  override<K extends string & keyof TBuilt>(
+    key: K,
+    factoryOrInstance: FactoryOrInstance<TBuilt, TBuilt[K]>,
+    options?: BindingOptions<TBuilt[K]>,
+  ): IContainerBuilder<TContract, TBuilt>;
+
+  /**
+   * Applies a module. Its prerequisites must already be on this builder and the keys
+   * it provides must be new: both are checked at compile time.
+   */
   addModule<
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TDepsM extends Record<string, any>,
+    TDepsM extends Record<string, any> = TBuilt,
     // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
-    TNew extends Record<string, any>,
+    TNew extends Record<string, any> = TBuilt,
   >(
-    module: (builder: IContainerBuilder<TContract, TDepsM>) => IContainerBuilder<TContract, TNew>,
-  ): IContainerBuilder<TContract, Override<TBuilt, TNew>>;
+    module: ((
+      builder: IContainerBuilder<TContract, TDepsM>,
+    ) => IContainerBuilder<TContract, TNew>) &
+      ModuleCheck<TBuilt, TDepsM, TNew>,
+  ): IContainerBuilder<TContract, Override<TBuilt, ModuleProvides<TDepsM, TNew>>>;
 
   /** Merges a standalone builder's factories into this one. */
   merge<TOther extends Record<string, unknown>>(

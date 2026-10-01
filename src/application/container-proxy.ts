@@ -1,13 +1,10 @@
 import type { Container, IValidator, ScopeOptions } from '../domain/types.js';
-import { Validator } from '../domain/validation.js';
 import type { Resolver } from '../infrastructure/resolver.js';
 import { Disposer } from './disposer.js';
 import { Extender } from './extender.js';
 import { Introspection } from './introspection.js';
 import { Preloader } from './preloader.js';
 import { Scoper } from './scoper.js';
-
-const defaultValidator = new Validator();
 
 /**
  * Wraps a {@link Resolver} in the user-facing ES Proxy:
@@ -23,26 +20,37 @@ const defaultValidator = new Validator();
  */
 export function buildContainerProxy(
   resolver: Resolver,
-  builderFactory?: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
-  validator: IValidator = defaultValidator,
+  builderFactory: () => { _toRecord(): Record<string, (c: unknown) => unknown> },
+  validator: IValidator,
+  disposeTimeout?: number,
 ): Container<Record<string, unknown>> {
   const introspection = new Introspection(resolver);
   const preloader = new Preloader(resolver);
-  const disposer = new Disposer(resolver);
+  const disposer = new Disposer(resolver, disposeTimeout);
   const scoper = new Scoper(validator);
   const extender = new Extender(validator);
 
   const methods = {
     scope: (extra: Record<string, (c: unknown) => unknown>, options?: ScopeOptions) =>
-      buildContainerProxy(scoper.scope(resolver, extra, options), builderFactory, validator),
+      buildContainerProxy(
+        scoper.scope(resolver, extra, options),
+        builderFactory,
+        validator,
+        disposeTimeout,
+      ),
 
     extend: (extra: Record<string, (c: unknown) => unknown>) =>
-      buildContainerProxy(extender.extend(resolver, extra), builderFactory, validator),
+      buildContainerProxy(
+        extender.extend(resolver, extra),
+        builderFactory,
+        validator,
+        disposeTimeout,
+      ),
 
     module: (fn: (b: unknown) => unknown) => {
-      if (!builderFactory) throw new Error('module() is not available');
-      const builder = builderFactory();
-      const result = fn(builder) as { _toRecord(): Record<string, (c: unknown) => unknown> };
+      const result = fn(builderFactory()) as {
+        _toRecord(): Record<string, (c: unknown) => unknown>;
+      };
       return methods.extend(result._toRecord());
     },
 
@@ -69,7 +77,7 @@ export function buildContainerProxy(
     toString: () => introspection.toString(),
     toJSON: (): Record<string, unknown> => Object.fromEntries(resolver.getCache()),
 
-    dispose: () => disposer.dispose(),
+    dispose: (...keys: string[]) => disposer.dispose(...keys),
   };
 
   const proxy = new Proxy(
@@ -106,7 +114,7 @@ export function buildContainerProxy(
         return resolver.resolve(key);
       },
 
-      // `in` mirrors resolution, which walks the parent chain — unlike the own-key
+      // `in` mirrors resolution, which walks the parent chain, unlike the own-key
       // traps below, which report this container's own bindings (prototype-like split).
       has(_target, prop) {
         if (typeof prop === 'symbol') {

@@ -17,6 +17,9 @@ export interface OnInit {
  * Implement this interface (or just add an `onDestroy` method) to run
  * cleanup logic when `container.dispose()` is called.
  *
+ * For objects you do not own (a pool, a client, a stop function), declare the
+ * teardown on the binding instead: `.add('pool', () => new Pool(), { dispose: (p) => p.end() })`.
+ *
  * @example
  * ```typescript
  * class Database implements OnDestroy {

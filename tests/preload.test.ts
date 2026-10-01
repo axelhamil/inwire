@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { container } from '../src/index.js';
+import { ContainerDisposedError, container } from '../src/index.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -169,7 +169,7 @@ describe('preload', () => {
     expect(initCount).toBe(2);
   });
 
-  it('dispose clears init state — re-preload calls onInit again', async () => {
+  it('dispose clears init state and refuses a later preload', async () => {
     let initCount = 0;
 
     const c = container()
@@ -184,8 +184,8 @@ describe('preload', () => {
     expect(initCount).toBe(1);
 
     await c.dispose();
-    await c.preload('service');
-    expect(initCount).toBe(2);
+    await expect(c.preload('service')).rejects.toThrow(ContainerDisposedError);
+    expect(initCount).toBe(1);
   });
 
   it('propagates onInit errors', async () => {

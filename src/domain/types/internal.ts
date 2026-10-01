@@ -1,5 +1,5 @@
 /**
- * Internal collaborator interfaces — implemented by `infrastructure/` classes,
+ * Internal collaborator interfaces, implemented by `infrastructure/` classes,
  * consumed by `application/` orchestrators. NOT part of the public API.
  *
  * Users should never need to import these. They exist so application code
@@ -43,7 +43,7 @@ export interface ICycleDetector {
 }
 
 /**
- * Core resolver contract — resolves dependencies by key.
+ * Core resolver contract: resolves dependencies by key.
  * Used by application layer (Introspection, Preloader, Disposer, ContainerProxy).
  */
 export interface IResolver {
@@ -60,6 +60,8 @@ export interface IResolver {
   // Lifecycle delegation
   /** Instances whose `onDestroy()` already ran, shared across `extend()` siblings. */
   getDestroyedInstances(): WeakSet<object>;
+  /** Refuses any later resolution of `keys`, or of every key when called without arguments. */
+  markDisposed(...keys: string[]): void;
   setDeferOnInit(defer: boolean): void;
   callOnInit(key: string): Promise<void>;
   getInitCalled(): Set<string>;

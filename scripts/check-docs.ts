@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const DOC_FILES = ['README.md', 'llms-full.txt'];
+const DOC_FILES = ['README.md', 'llms.txt', 'llms-full.txt'];
 
 /**
  * Diagnostics that a partial snippet legitimately produces: documentation code
@@ -109,6 +109,13 @@ function checkSnippet(snippet: Snippet): ts.Diagnostic[] {
 
 const snippets = DOC_FILES.flatMap(extractSnippets);
 let failures = 0;
+
+// A file without snippets would pass vacuously, so its prose could drift unchecked.
+for (const file of DOC_FILES) {
+  if (snippets.some((snippet) => snippet.file === file)) continue;
+  failures++;
+  console.error(`${file}: no \`\`\`typescript snippet to check`);
+}
 
 for (const snippet of snippets) {
   for (const diagnostic of checkSnippet(snippet)) {

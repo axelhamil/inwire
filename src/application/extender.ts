@@ -11,7 +11,7 @@ import { Resolver } from '../infrastructure/resolver.js';
  * `container-proxy.ts`, and `scoper.ts`.
  *
  * Extended semantics:
- * - Factory map is merged (existing keys overridden by new ones — same as
+ * - Factory map is merged (existing keys overridden by new ones, same as
  *   `.add()` over an existing key).
  * - Singleton cache and `initCalled` state are snapshot-copied (instances are
  *   shared, no parent chain).
