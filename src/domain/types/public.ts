@@ -275,8 +275,12 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
    * Tears down, in reverse resolution order, every resolved instance and every eager
    * instance: the binding's `dispose` hook when declared, otherwise `onDestroy()`.
    * Keeps going on errors, then rethrows them (an `AggregateError` when several).
+   *
+   * With keys, tears down only those bindings (`dispose('relay')` stops a loop before
+   * the pool it uses closes). A disposed binding is never recreated: reading it
+   * throws `ContainerDisposedError`.
    */
-  dispose(): Promise<void>;
+  dispose(...keys: (keyof T)[]): Promise<void>;
 
   /** ES2023 explicit resource management hook — alias of {@link IContainer.dispose}. */
   [Symbol.asyncDispose](): Promise<void>;

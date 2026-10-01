@@ -11,14 +11,20 @@ import { bindingMeta } from '../infrastructure/binding.js';
 export class Disposer {
   constructor(private readonly resolver: IResolver) {}
 
-  async dispose(): Promise<void> {
+  /**
+   * Without keys, tears down the whole container. With keys, tears down only those
+   * bindings and leaves the others usable. Either way, a disposed binding refuses
+   * any later access with `ContainerDisposedError` instead of being recreated.
+   */
+  async dispose(...keys: string[]): Promise<void> {
     const errors: unknown[] = [];
+    this.resolver.markDisposed(...keys);
 
     // Shared across `extend()` siblings, which copy the cache and thus share instances.
     // Marked before the call so a throwing hook still never runs twice.
     const destroyed = this.resolver.getDestroyedInstances();
 
-    for (const [key, instance] of this.teardownOrder()) {
+    for (const [key, instance] of this.teardownOrder(keys)) {
       const teardown = this.teardownOf(key, instance);
       if (!teardown) continue;
       if (isReference(instance)) {
@@ -32,10 +38,7 @@ export class Disposer {
       }
     }
 
-    this.resolver.getCache().clear();
-    this.resolver.clearAllInitState();
-    this.resolver.clearAllDepGraph();
-    this.resolver.clearWarnings();
+    this.release(keys);
 
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) {
@@ -43,14 +46,28 @@ export class Disposer {
     }
   }
 
-  private teardownOrder(): [string, unknown][] {
+  private teardownOrder(keys: string[]): [string, unknown][] {
     const cache = this.resolver.getCache();
     const entries = [...cache.entries()].reverse();
     for (const [key, factory] of this.resolver.getFactories()) {
       const eager = bindingMeta(factory)?.eager;
       if (eager && !cache.has(key)) entries.push([key, eager.value]);
     }
-    return entries;
+    return keys.length === 0 ? entries : entries.filter(([key]) => keys.includes(key));
+  }
+
+  private release(keys: string[]): void {
+    if (keys.length === 0) {
+      this.resolver.getCache().clear();
+      this.resolver.clearAllInitState();
+      this.resolver.clearAllDepGraph();
+      this.resolver.clearWarnings();
+      return;
+    }
+    for (const key of keys) this.resolver.getCache().delete(key);
+    this.resolver.clearInitState(...keys);
+    this.resolver.clearDepGraph(...keys);
+    this.resolver.clearWarningsForKeys(...keys);
   }
 
   private teardownOf(key: string, instance: unknown): (() => unknown) | undefined {

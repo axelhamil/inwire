@@ -60,6 +60,8 @@ export interface IResolver {
   // Lifecycle delegation
   /** Instances whose `onDestroy()` already ran, shared across `extend()` siblings. */
   getDestroyedInstances(): WeakSet<object>;
+  /** Refuses any later resolution of `keys`, or of every key when called without arguments. */
+  markDisposed(...keys: string[]): void;
   setDeferOnInit(defer: boolean): void;
   callOnInit(key: string): Promise<void>;
   getInitCalled(): Set<string>;

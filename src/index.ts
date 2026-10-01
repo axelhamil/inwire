@@ -28,6 +28,7 @@ export {
   AsyncInitErrorWarning,
   CircularDependencyError,
   ContainerConfigError,
+  ContainerDisposedError,
   ContainerError,
   DuplicateKeyError,
   FactoryError,

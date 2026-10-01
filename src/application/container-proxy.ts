@@ -66,7 +66,7 @@ export function buildContainerProxy(
     toString: () => introspection.toString(),
     toJSON: (): Record<string, unknown> => Object.fromEntries(resolver.getCache()),
 
-    dispose: () => disposer.dispose(),
+    dispose: (...keys: string[]) => disposer.dispose(...keys),
   };
 
   const proxy = new Proxy(

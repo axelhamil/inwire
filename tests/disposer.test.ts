@@ -16,6 +16,7 @@ function createMockResolver(
     resolve: vi.fn(),
     isResolved: vi.fn(),
     getFactories: () => new Map(),
+    markDisposed: vi.fn(),
     getDepGraph: vi.fn(),
     getResolvedKeys: vi.fn(),
     getWarnings: vi.fn(),

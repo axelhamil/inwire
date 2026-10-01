@@ -214,6 +214,28 @@ export class FactoryError extends ContainerError {
 }
 
 /**
+ * Thrown when a binding is read after `dispose()` tore it down: a closed pool or a
+ * stopped loop must not be silently recreated by a late access.
+ *
+ * @example
+ * ```typescript
+ * await app.dispose();
+ * app.db;
+ * // ContainerDisposedError: Cannot resolve 'db': it was disposed.
+ * ```
+ */
+export class ContainerDisposedError extends ContainerError {
+  readonly hint: string;
+  readonly details: { key: string };
+
+  constructor(key: string) {
+    super(`Cannot resolve '${key}': it was disposed.`);
+    this.hint = `Something still uses '${key}' after shutdown. Stop it before calling dispose(), or build a new container.`;
+    this.details = { key };
+  }
+}
+
+/**
  * Warning emitted when a singleton depends on a transient dependency.
  * The transient value gets frozen inside the singleton — almost always a bug.
  *

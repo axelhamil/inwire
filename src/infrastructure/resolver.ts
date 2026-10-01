@@ -2,6 +2,7 @@ import type { AnyWarning } from '../domain/errors.js';
 import {
   AsyncInitErrorWarning,
   CircularDependencyError,
+  ContainerDisposedError,
   FactoryError,
   ProviderNotFoundError,
   ScopeMismatchWarning,
@@ -47,6 +48,8 @@ export class Resolver implements IResolver {
   private readonly cycleDetector: ICycleDetector;
   private readonly dependencyTracker: IDependencyTracker;
   private readonly destroyedInstances: WeakSet<object>;
+  private readonly disposedKeys = new Set<string>();
+  private disposed = false;
 
   constructor(deps: ResolverDeps) {
     this.factories = deps.factories;
@@ -65,6 +68,8 @@ export class Resolver implements IResolver {
   }
 
   resolve(key: string, chain: string[] = []): unknown {
+    if (this.disposed || this.disposedKeys.has(key)) throw new ContainerDisposedError(key);
+
     const factory = this.factories.get(key);
 
     // Fast path: singleton cache hit.
@@ -171,6 +176,7 @@ export class Resolver implements IResolver {
   private classifyError(key: string, currentChain: string[], error: unknown): Error {
     if (
       error instanceof CircularDependencyError ||
+      error instanceof ContainerDisposedError ||
       error instanceof ProviderNotFoundError ||
       error instanceof UndefinedReturnError ||
       error instanceof FactoryError
@@ -273,6 +279,11 @@ export class Resolver implements IResolver {
    */
   getDestroyedInstances(): WeakSet<object> {
     return this.destroyedInstances;
+  }
+
+  markDisposed(...keys: string[]): void {
+    if (keys.length === 0) this.disposed = true;
+    for (const key of keys) this.disposedKeys.add(key);
   }
 
   /** Look up a factory in this resolver or its parent chain. */
