@@ -1,3 +1,39 @@
+# [4.0.0](https://github.com/axelhamil/inwire/compare/v3.1.3...v4.0.0) (2026-10-01)
+
+
+* feat!: refuse access to a disposed binding and allow a targeted dispose ([8dcf9a7](https://github.com/axelhamil/inwire/commit/8dcf9a71a8e92070bf734b6882bbe33047fd1686))
+* feat!: reject modules whose prerequisites the host lacks at compile time ([f40f9ee](https://github.com/axelhamil/inwire/commit/f40f9eefd12937fa03acbba046e4c22e8c284a87))
+
+
+### Bug Fixes
+
+* **errors:** point DuplicateKeyError to builder override() ([d5ee8b1](https://github.com/axelhamil/inwire/commit/d5ee8b1c3202b49930ec09ad4ea0b519f60303f2))
+* let teardown hooks drain work that reads cached bindings ([d864381](https://github.com/axelhamil/inwire/commit/d86438165dd844daaf7677ba69e96dbb25c90e52))
+* **types:** reject a bare function in override() for a function binding ([a649f8b](https://github.com/axelhamil/inwire/commit/a649f8b68d9d122039690914e722861c6218c816))
+* **types:** type a key overridden by container.module() with its new value ([37bc765](https://github.com/axelhamil/inwire/commit/37bc765f2f119d94065e77dda3db624e6a855485))
+
+
+### Features
+
+* bound each teardown hook with a disposeTimeout ([0e22470](https://github.com/axelhamil/inwire/commit/0e22470570477d444ddd376fe43f500410521441))
+* declare a dispose hook per binding and dispose eager instances ([b729675](https://github.com/axelhamil/inwire/commit/b72967519b577cedc454142e1089636c2e3ced9b))
+* override a binding on the builder so every dependent receives it ([96768f8](https://github.com/axelhamil/inwire/commit/96768f80d2513816795aaf55c615e7b6ea3b7b4f))
+* **types:** let a container be assigned to Record<string, unknown> ([35e017a](https://github.com/axelhamil/inwire/commit/35e017a1e3230fbc4f904849a5231cf5fd9fda40))
+
+
+### BREAKING CHANGES
+
+* a container is single use after `dispose()`. Reading a
+binding, iterating or calling `preload()` throws ContainerDisposedError
+instead of recreating instances. Build a new container (or a new scope) when
+you need fresh instances, and use `reset()` to drop cached singletons without
+tearing them down.
+* `addModule()` rejects at compile time a local-mode module
+(`defineModule<TDeps>()`) whose prerequisites are not already on the builder.
+Add the prerequisites first, or provide them from an earlier module. The host
+type no longer gains the module's `TDeps`: a key that only the module declared
+as a prerequisite is no longer visible on the built container.
+
 ## [3.1.3](https://github.com/axelhamil/inwire/compare/v3.1.2...v3.1.3) (2026-08-05)
 
 ## [3.1.2](https://github.com/axelhamil/inwire/compare/v3.1.1...v3.1.2) (2026-08-05)
