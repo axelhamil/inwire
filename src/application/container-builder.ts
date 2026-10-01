@@ -99,7 +99,7 @@ export class ContainerBuilder<
    */
   override<K extends string & keyof TBuilt>(
     key: K,
-    factoryOrInstance: ((c: TBuilt) => TBuilt[K]) | TBuilt[K],
+    factoryOrInstance: FactoryOrInstance<TBuilt, TBuilt[K]>,
     options?: BindingOptions<TBuilt[K]>,
   ): ContainerBuilder<TContract, TBuilt> {
     if (!this.factories.has(key)) {

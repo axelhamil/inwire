@@ -60,6 +60,19 @@ describe('builder override()', () => {
     );
   });
 
+  it('rejects a plain function for a binding whose value is a function', () => {
+    const builder = container().add('stop', () => async () => {});
+
+    // @ts-expect-error a function is a factory: wrap the value, () => async () => {}
+    builder.override('stop', async () => {});
+
+    const app = container()
+      .add('stop', () => async () => {})
+      .override('stop', () => async () => {})
+      .build();
+    expect(typeof app.stop).toBe('function');
+  });
+
   it('replaces the dispose hook of the overridden binding', async () => {
     const realEnd = vi.fn();
     const fakeEnd = vi.fn();
