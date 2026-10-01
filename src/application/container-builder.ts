@@ -1,6 +1,7 @@
 import { DuplicateKeyError, ReservedKeyError } from '../domain/errors.js';
 import type {
   AddBuilt,
+  BindingOptions,
   BuilderKey,
   Container,
   ContainerOptions,
@@ -14,6 +15,7 @@ import type {
 } from '../domain/types.js';
 import { RESERVED_KEYS as RESERVED } from '../domain/types.js';
 import { Validator } from '../domain/validation.js';
+import { describeBinding } from '../infrastructure/binding.js';
 import { CycleDetector } from '../infrastructure/cycle-detector.js';
 import { DependencyTracker } from '../infrastructure/dependency-tracker.js';
 import { Resolver } from '../infrastructure/resolver.js';
@@ -49,17 +51,17 @@ export class ContainerBuilder<
    *
    * Convention: `typeof value === 'function'` → factory. Otherwise → instance (wrapped in `() => value`).
    * To register a function as a value: `add('fn', () => myFunction)`.
+   *
+   * `options.dispose` declares how `dispose()` tears the instance down, for objects
+   * without `onDestroy()`: `.add('pool', () => new Pool(), { dispose: (p) => p.end() })`.
    */
   add<K extends BuilderKey<TContract>, V extends TContract[K]>(
     key: NonReservedKey<K>,
     factoryOrInstance: FactoryOrInstance<TBuilt, V>,
+    options?: BindingOptions<V>,
   ): ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>> {
     this.validateKey(key);
-    if (typeof factoryOrInstance === 'function') {
-      this.factories.set(key, factoryOrInstance as Factory);
-    } else {
-      this.factories.set(key, () => factoryOrInstance);
-    }
+    this.factories.set(key, toFactory(factoryOrInstance, options));
     return this as unknown as ContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
   }
 
@@ -183,6 +185,19 @@ export class ContainerBuilder<
       throw new ReservedKeyError(key, RESERVED);
     }
   }
+}
+
+/**
+ * Turns the value given to `.add()` into a factory. Eager instances and bindings with
+ * a `dispose` hook carry their metadata, so `dispose()` can reach an eager instance
+ * that was never read.
+ */
+function toFactory<V>(value: unknown, options: BindingOptions<V> = {}): Factory {
+  const dispose = options.dispose as ((instance: unknown) => unknown) | undefined;
+  if (typeof value === 'function') {
+    return dispose ? describeBinding(value as Factory, { dispose }) : (value as Factory);
+  }
+  return describeBinding(() => value, { dispose, eager: { value } });
 }
 
 /**

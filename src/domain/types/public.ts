@@ -137,6 +137,27 @@ export type FactoryOrInstance<TBuilt, V> =
 export type AddBuilt<TBuilt, K extends string, V> = Override<TBuilt, Record<K, V>>;
 
 /**
+ * Per-binding options, the optional third argument of `.add()`.
+ *
+ * @example Third-party resources without `onDestroy()`:
+ * ```typescript
+ * container()
+ *   .add('pool', (c) => new Pool({ connectionString: c.env.DATABASE_URL }), {
+ *     dispose: (pool) => pool.end(),
+ *   })
+ *   .add('relay', (c) => startRelayLoop(c.pool), { dispose: (stop) => stop() });
+ * ```
+ */
+export interface BindingOptions<V> {
+  /**
+   * Teardown hook run by `dispose()` with the binding's instance, eager instances
+   * included. Use it for objects you do not own (a pool, a client, the stop function
+   * of a loop). Takes precedence over the instance's own `onDestroy()`.
+   */
+  dispose?: (instance: V) => void | Promise<void>;
+}
+
+/**
  * Global, augmentable interface describing the application's dependency shape.
  *
  * Empty by default. Each module file augments it with the bindings IT provides,
@@ -250,7 +271,11 @@ export interface IContainer<T extends Record<string, any> = Record<string, unkno
   /** Invalidates cached singletons, forcing re-creation on next access. */
   reset(...keys: (keyof T)[]): void;
 
-  /** LIFO `onDestroy()` on all resolved instances. */
+  /**
+   * Tears down, in reverse resolution order, every resolved instance and every eager
+   * instance: the binding's `dispose` hook when declared, otherwise `onDestroy()`.
+   * Keeps going on errors, then rethrows them (an `AggregateError` when several).
+   */
   dispose(): Promise<void>;
 
   /** ES2023 explicit resource management hook — alias of {@link IContainer.dispose}. */
@@ -281,10 +306,11 @@ export interface IContainerBuilder<
   // biome-ignore lint/suspicious/noExplicitAny: `any` allows interfaces without index signatures
   TBuilt extends Record<string, any> = {},
 > {
-  /** Registers a dependency — factory (lazy) or instance (eager). */
+  /** Registers a dependency — factory (lazy) or instance (eager), with an optional `dispose` hook. */
   add<K extends BuilderKey<TContract>, V extends TContract[K]>(
     key: NonReservedKey<K>,
     factoryOrInstance: FactoryOrInstance<TBuilt, V>,
+    options?: BindingOptions<V>,
   ): IContainerBuilder<TContract, AddBuilt<TBuilt, K, V>>;
 
   /** Registers a transient dependency (new instance on every access). */

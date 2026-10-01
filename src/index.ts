@@ -40,6 +40,7 @@ export {
 export type { OnDestroy, OnInit } from './domain/lifecycle.js';
 export type {
   AppDeps,
+  BindingOptions,
   Container,
   ContainerGraph,
   ContainerHealth,
