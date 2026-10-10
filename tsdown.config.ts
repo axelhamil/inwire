@@ -6,7 +6,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  minify: true,
+  minify: { mangle: { keepNames: { class: true, function: false } } },
   treeshake: true,
   target: 'es2022',
   publint: true,
