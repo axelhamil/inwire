@@ -19,7 +19,7 @@ Cross-cutting rules. They apply everywhere; everything below is a consequence.
 ## Commands
 
 ```bash
-pnpm test              # vitest run (738 tests, 64 files), includes typecheck
+pnpm test              # vitest run (770 tests, 68 files), includes typecheck
 pnpm test:bun          # same runtime tests under Bun (bun --bun vitest run, no typecheck)
 pnpm test:watch        # vitest in watch mode
 pnpm test:coverage     # vitest run --coverage (thresholds: 90% all metrics)
