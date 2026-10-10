@@ -1,3 +1,12 @@
+## [4.0.1](https://github.com/axelhamil/inwire/compare/v4.0.0...v4.0.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **build:** keep the names of the error classes in the published package ([273f38a](https://github.com/axelhamil/inwire/commit/273f38addfadb8f1c7f5b341e6b172360efa19ae))
+* let a container be awaited and compared by a test runner ([277221e](https://github.com/axelhamil/inwire/commit/277221ef4cd73615e0c08a6f9b505b5c1df0843b))
+* **types:** read a key declared any number of bindings earlier ([6d81db1](https://github.com/axelhamil/inwire/commit/6d81db113ca5420855a9d10258e1330a60184477))
+
 # [4.0.0](https://github.com/axelhamil/inwire/compare/v3.1.3...v4.0.0) (2026-10-01)
 
 
