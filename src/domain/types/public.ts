@@ -23,8 +23,28 @@ export type Simplify<T> = { [K in keyof T]: T[K] } & {};
  * Utility: `T` with keys of `U` overridden by `U`. Avoids the `A & A → never`
  * collapse when classes have private members and the same key is declared on
  * both sides (e.g. global `AppDeps` + module `.add()`).
+ *
+ * Keys of `T` are only filtered out when `U` redeclares one of them: without overlap
+ * `T & U` already has the right shape, and skipping `Omit` halves the cost of a link.
  */
-export type Override<T, U> = Simplify<Omit<T, keyof U> & U>;
+export type Override<T, U> = ResolveProperties<
+  Simplify<keyof T & keyof U extends never ? T & U : Omit<T, keyof U> & U>
+>;
+
+/**
+ * Utility: resolves the type of every property of `T` now and returns `T` unchanged.
+ *
+ * A mapped type computes a property type on first read, from the type it maps. In a
+ * chain of `.add()` calls each link maps the previous one, so a first read of a key
+ * declared N links earlier would walk N links at once and hit the instantiation depth
+ * limit of TypeScript (TS2589, the key then reads as `any`). Resolving each link when
+ * it is created keeps every read one link deep, whatever the length of the chain.
+ *
+ * The condition always holds: it is only there because a conditional type evaluates
+ * the type it checks as soon as `T` is known. It has no `infer`, so in generic code,
+ * where `T` is not known yet, the result still compares as `T`.
+ */
+type ResolveProperties<T> = T[keyof T] extends unknown ? T : never;
 
 /**
  * `true` when `TDeps` is the global {@link AppDeps} interface, i.e. the module was
