@@ -19,16 +19,17 @@ Cross-cutting rules. They apply everywhere; everything below is a consequence.
 ## Commands
 
 ```bash
-pnpm test              # vitest run (738 tests, 64 files), includes typecheck
+pnpm test              # vitest run (770 tests, 68 files), includes typecheck
 pnpm test:bun          # same runtime tests under Bun (bun --bun vitest run, no typecheck)
 pnpm test:watch        # vitest in watch mode
 pnpm test:coverage     # vitest run --coverage (thresholds: 90% all metrics)
 pnpm build             # tsdown → dist/index.mjs + dist/index.d.mts
 pnpm typecheck         # tsc --noEmit (src + tests + scripts + examples, three tsconfigs)
 pnpm check:docs        # type-checks every ```typescript block in README.md, llms.txt, llms-full.txt; a file without snippets fails
+pnpm check:dist        # builds, then checks on dist/index.mjs that every exported class keeps its name (error.name, stack, instanceof)
 pnpm lint              # biome check
 pnpm lint:fix          # biome check --fix
-pnpm check             # biome check && pnpm typecheck && pnpm check:docs && pnpm test:coverage
+pnpm check             # biome check && pnpm typecheck && pnpm check:docs && pnpm test:coverage && pnpm check:dist
 ```
 
 ## Stack
@@ -175,6 +176,7 @@ src/
 ### Build
 
 - tsdown (Rolldown): ESM only, minified, treeshaken, sourcemaps, `.d.mts` declarations.
+- The minifier keeps class names (`mangle.keepNames.class`), so an error keeps its name in the published package (`error.name`, the stack header, an uncaught error). A new error class gets its entry in `scripts/check-dist.ts`.
 - `publint` runs on build.
 - Only `dist/` is published (sourcemaps excluded via `!dist/*.map`).
 

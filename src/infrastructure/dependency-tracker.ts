@@ -23,11 +23,12 @@ export class DependencyTracker implements IDependencyTracker {
         get: (_target, prop) => {
           if (typeof prop === 'symbol') return undefined;
           const depKey = prop as string;
-          if (!seen.has(depKey)) {
+          const instance = resolve(depKey, chain);
+          if (instance !== undefined && !seen.has(depKey)) {
             seen.add(depKey);
             deps.push(depKey);
           }
-          return resolve(depKey, chain);
+          return instance;
         },
       },
     );

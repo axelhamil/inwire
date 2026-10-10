@@ -32,6 +32,33 @@ export interface ResolverDeps {
 }
 
 /**
+ * Keys that a runtime or a test runner reads on any value, without the user asking:
+ * - `then`: promise resolution (`await`, the return of an async function);
+ * - `$$typeof`, `nodeType`, `tagName`, `hasAttribute`, `_isMockFunction` and the
+ *   Immutable.js markers: the equality and the printer of Vitest and Jest
+ *   (`toEqual`, `toHaveBeenCalledWith`, snapshots, the diff of a failed assertion);
+ * - `asymmetricMatch`: the equality of Jest.
+ *
+ * Unregistered, they read as `undefined` instead of throwing `ProviderNotFoundError`;
+ * a binding registered under one of these names is resolved like any other. The check
+ * sits on the path of a key with no local factory, so a cached read never pays for it.
+ */
+const RUNTIME_PROBES: ReadonlySet<string> = new Set([
+  'then',
+  '$$typeof',
+  'nodeType',
+  'tagName',
+  'hasAttribute',
+  '_isMockFunction',
+  'asymmetricMatch',
+  '@@__IMMUTABLE_ITERABLE__@@',
+  '@@__IMMUTABLE_KEYED__@@',
+  '@@__IMMUTABLE_LIST__@@',
+  '@@__IMMUTABLE_RECORD__@@',
+  '@@__IMMUTABLE_SET__@@',
+]);
+
+/**
  * Core resolver: lazy singleton resolution with parent chain support.
  * Delegates cycle detection and dependency tracking to injected collaborators.
  */
@@ -74,6 +101,10 @@ export class Resolver implements IResolver {
     // work they drain can still read live instances; the cache is cleared right after.
     if (factory && !isTransient(factory) && this.cache.has(key)) {
       return this.cache.get(key);
+    }
+
+    if (!factory && RUNTIME_PROBES.has(key) && !this.getAllRegisteredKeys().includes(key)) {
+      return undefined;
     }
 
     if (this.disposed || this.disposedKeys.has(key)) throw new ContainerDisposedError(key);

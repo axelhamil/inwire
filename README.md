@@ -572,6 +572,8 @@ Powered by Levenshtein distance. Default threshold: 50 % similarity, configurabl
 
 `scope`, `extend`, `module`, `preload`, `reset`, `inspect`, `describe`, `health`, `dispose`, `toString`, `toJSON`, `size` cannot be used as dependency keys.
 
+A container can be awaited and returned from an async function: `then` is not reserved, it reads as `undefined` unless you register a binding under that name.
+
 ### Duplicate keys
 
 `.add()` and `.addTransient()` throw `DuplicateKeyError` when a key is already registered, no silent overwrite. To replace a binding on purpose, use `.override()` on the builder.

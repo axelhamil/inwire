@@ -18,6 +18,7 @@ pnpm check
 | `pnpm test`       | Run all tests (runtime and type assertions)                    |
 | `pnpm test:bun`   | Run the runtime tests under Bun                                |
 | `pnpm check:docs` | Type-check every snippet of README.md, llms.txt, llms-full.txt |
+| `pnpm check:dist` | Build, then check the class names of the built package         |
 | `pnpm build`      | Build the package                                              |
 | `pnpm lint:fix`   | Auto-fix lint issues                                           |
 
